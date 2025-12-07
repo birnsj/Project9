@@ -53,6 +53,12 @@ namespace Project9.Editor
             fileMenu.DropDownItems.Add(saveAsMenuItem);
 
             _menuStrip.Items.Add(fileMenu);
+            
+            // About Menu
+            ToolStripMenuItem aboutMenu = new ToolStripMenuItem("About");
+            aboutMenu.Click += AboutMenu_Click;
+            _menuStrip.Items.Add(aboutMenu);
+            
             this.MainMenuStrip = _menuStrip;
 
             // Tool Strip for tile selection
@@ -208,6 +214,11 @@ namespace Project9.Editor
                     }
                 }
             }
+        }
+
+        private void AboutMenu_Click(object? sender, EventArgs e)
+        {
+            MessageBox.Show("Project 9 V001", "About", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         protected override void Dispose(bool disposing)

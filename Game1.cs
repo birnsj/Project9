@@ -205,6 +205,21 @@ namespace Project9
 
             _spriteBatch.End();
 
+            // Draw version number in lower right corner
+            if (_uiFont != null)
+            {
+                string versionText = "V001";
+                Vector2 textSize = _uiFont.MeasureString(versionText);
+                Vector2 position = new Vector2(
+                    GraphicsDevice.Viewport.Width - textSize.X - 10,
+                    GraphicsDevice.Viewport.Height - textSize.Y - 10
+                );
+
+                _spriteBatch.Begin();
+                _spriteBatch.DrawString(_uiFont, versionText, position, Color.White);
+                _spriteBatch.End();
+            }
+
             // Draw UI
             _desktop.Render();
 
