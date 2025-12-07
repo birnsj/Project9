@@ -17,6 +17,9 @@
     <Compile Remove="Project9.Shared\**" />
     <EmbeddedResource Remove="Project9.Shared\**" />
     <None Remove="Project9.Shared\**" />
+    <Compile Remove="Project9.Editor\**" />
+    <EmbeddedResource Remove="Project9.Editor\**" />
+    <None Remove="Project9.Editor\**" />
   </ItemGroup>
 
   <ItemGroup>

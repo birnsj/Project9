@@ -45,12 +45,19 @@ namespace Project9
         {
             const string mapPath = "Content/world/world.json";
             
-            if (File.Exists(mapPath))
+            // Resolve path the same way as the editor - try current directory, then walk up
+            string? resolvedPath = ResolveMapPath(mapPath);
+            if (resolvedPath == null)
+            {
+                resolvedPath = mapPath; // Fallback to original path
+            }
+            
+            if (File.Exists(resolvedPath))
             {
                 try
                 {
                     // Load map synchronously (MonoGame LoadContent is synchronous)
-                    var mapData = Task.Run(async () => await MapSerializer.LoadFromFileAsync(mapPath)).Result;
+                    var mapData = Task.Run(async () => await MapSerializer.LoadFromFileAsync(resolvedPath)).Result;
                     
                     if (mapData != null)
                     {
@@ -71,7 +78,7 @@ namespace Project9
                             }
                         }
                         
-                        Console.WriteLine($"[IsometricMap] Loaded map from {mapPath}: {_mapWidth}x{_mapHeight}, {_tiles.Count} tiles");
+                        Console.WriteLine($"[IsometricMap] Loaded map from {resolvedPath}: {_mapWidth}x{_mapHeight}, {_tiles.Count} tiles");
                     }
                     else
                     {
@@ -81,15 +88,42 @@ namespace Project9
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[IsometricMap] Error loading map from {mapPath}: {ex.Message}");
+                    Console.WriteLine($"[IsometricMap] Error loading map from {resolvedPath}: {ex.Message}");
                     CreateDefaultMap();
                 }
             }
             else
             {
-                Console.WriteLine($"[IsometricMap] Map file not found at {mapPath}, creating default map");
+                Console.WriteLine($"[IsometricMap] Map file not found at {resolvedPath}, creating default map");
                 CreateDefaultMap();
             }
+        }
+        
+        private static string? ResolveMapPath(string relativePath)
+        {
+            // Try current directory first
+            string currentDir = Directory.GetCurrentDirectory();
+            string fullPath = Path.GetFullPath(Path.Combine(currentDir, relativePath));
+            if (File.Exists(fullPath))
+                return fullPath;
+
+            // Try executable directory
+            string exeDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) ?? AppContext.BaseDirectory;
+            fullPath = Path.GetFullPath(Path.Combine(exeDir, relativePath));
+            if (File.Exists(fullPath))
+                return fullPath;
+
+            // Try going up to project root (for development)
+            var dir = new DirectoryInfo(exeDir);
+            while (dir != null && dir.Parent != null)
+            {
+                string testPath = Path.GetFullPath(Path.Combine(dir.FullName, relativePath));
+                if (File.Exists(testPath))
+                    return testPath;
+                dir = dir.Parent;
+            }
+
+            return null;
         }
 
         private void CreateDefaultMap()

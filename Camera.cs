@@ -28,7 +28,7 @@ namespace Project9
             _position = Vector2.Zero;
             _zoom = 1.0f;
             _minZoom = 0.5f;
-            _maxZoom = 2.0f;
+            _maxZoom = 4.0f;
             _panSpeed = 300.0f;
         }
 
