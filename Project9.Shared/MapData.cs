@@ -23,10 +23,36 @@ namespace Project9.Shared
     public class EnemyData
     {
         [JsonPropertyName("x")]
-        public int X { get; set; }
+        public float X { get; set; }
 
         [JsonPropertyName("y")]
-        public int Y { get; set; }
+        public float Y { get; set; }
+        
+        // Legacy support: if X/Y are integers, treat as tile coordinates
+        [JsonIgnore]
+        public int TileX => (int)Math.Round(X);
+        
+        [JsonIgnore]
+        public int TileY => (int)Math.Round(Y);
+    }
+
+    /// <summary>
+    /// Represents the player spawn position in the map for JSON serialization
+    /// </summary>
+    public class PlayerData
+    {
+        [JsonPropertyName("x")]
+        public float X { get; set; }
+
+        [JsonPropertyName("y")]
+        public float Y { get; set; }
+        
+        // Legacy support: if X/Y are integers, treat as tile coordinates
+        [JsonIgnore]
+        public int TileX => (int)Math.Round(X);
+        
+        [JsonIgnore]
+        public int TileY => (int)Math.Round(Y);
     }
 
     /// <summary>
@@ -45,6 +71,9 @@ namespace Project9.Shared
 
         [JsonPropertyName("enemies")]
         public List<EnemyData> Enemies { get; set; } = new List<EnemyData>();
+
+        [JsonPropertyName("player")]
+        public PlayerData? Player { get; set; }
 
         /// <summary>
         /// Creates a default empty map with specified dimensions
@@ -70,6 +99,16 @@ namespace Project9.Shared
                     });
                 }
             }
+
+            // Set default player position at map center (in pixel coordinates)
+            float centerTileX = (width - 1) / 2.0f;
+            float centerTileY = (height - 1) / 2.0f;
+            var (centerScreenX, centerScreenY) = IsometricMath.TileToScreen((int)centerTileX, (int)centerTileY);
+            map.Player = new PlayerData
+            {
+                X = centerScreenX,
+                Y = centerScreenY
+            };
 
             return map;
         }

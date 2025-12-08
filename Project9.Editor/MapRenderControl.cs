@@ -21,6 +21,10 @@ namespace Project9.Editor
         private Point _mousePosition;
         private int? _hoverTileX;
         private int? _hoverTileY;
+        private bool _isDragging;
+        private EnemyData? _draggedEnemy;
+        private bool _isDraggingPlayer;
+        private PointF _dragOffset;
 
         public TerrainType SelectedTerrainType
         {
@@ -55,6 +59,8 @@ namespace Project9.Editor
             this.MouseClick += MapRenderControl_MouseClick;
             this.MouseMove += MapRenderControl_MouseMove;
             this.MouseLeave += MapRenderControl_MouseLeave;
+            this.MouseDown += MapRenderControl_MouseDown;
+            this.MouseUp += MapRenderControl_MouseUp;
             this.KeyDown += MapRenderControl_KeyDown;
             this.KeyUp += MapRenderControl_KeyUp;
             this.SetStyle(ControlStyles.Selectable, true);
@@ -162,7 +168,32 @@ namespace Project9.Editor
         private void MapRenderControl_MouseMove(object? sender, MouseEventArgs e)
         {
             _mousePosition = e.Location;
-            UpdateHoveredTile(e.Location);
+            
+            if (_isDragging)
+            {
+                PointF worldPos = ScreenToWorld(e.Location);
+                PointF targetPos = new PointF(worldPos.X - _dragOffset.X, worldPos.Y - _dragOffset.Y);
+                
+                // Snap to 64x32 grid
+                targetPos = SnapToGrid(targetPos);
+                
+                if (_isDraggingPlayer && _mapData.MapData.Player != null)
+                {
+                    _mapData.MapData.Player.X = targetPos.X;
+                    _mapData.MapData.Player.Y = targetPos.Y;
+                    Invalidate();
+                }
+                else if (_draggedEnemy != null)
+                {
+                    _draggedEnemy.X = targetPos.X;
+                    _draggedEnemy.Y = targetPos.Y;
+                    Invalidate();
+                }
+            }
+            else
+            {
+                UpdateHoveredTile(e.Location);
+            }
         }
 
         private void MapRenderControl_MouseLeave(object? sender, EventArgs e)
@@ -249,29 +280,91 @@ namespace Project9.Editor
             }
         }
 
-        private void MapRenderControl_MouseClick(object? sender, MouseEventArgs e)
+        private PointF SnapToGrid(PointF position)
+        {
+            const float gridX = 64.0f;
+            const float gridY = 32.0f;
+            float snappedX = (float)(Math.Round(position.X / gridX) * gridX);
+            float snappedY = (float)(Math.Round(position.Y / gridY) * gridY);
+            return new PointF(snappedX, snappedY);
+        }
+
+        private void MapRenderControl_MouseDown(object? sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Left)
             {
-                // Use the hovered tile coordinates if available (matches the preview)
-                if (_hoverTileX.HasValue && _hoverTileY.HasValue)
+                PointF worldPos = ScreenToWorld(e.Location);
+                
+                // Check if clicking on player
+                if (_mapData.MapData.Player != null)
                 {
-                    _mapData.SetTile(_hoverTileX.Value, _hoverTileY.Value, _selectedTerrainType);
-                    Invalidate();
-                }
-                else
-                {
-                    // Fallback: calculate from mouse position
-                    PointF worldPos = ScreenToWorld(e.Location);
-                    var (tileX, tileY) = IsometricMath.ScreenToTile(worldPos.X, worldPos.Y);
-                    
-                    if (tileX >= 0 && tileX < _mapData.Width && tileY >= 0 && tileY < _mapData.Height)
+                    float playerScreenX = _mapData.MapData.Player.X;
+                    float playerScreenY = _mapData.MapData.Player.Y;
+                    float distance = (float)Math.Sqrt(Math.Pow(worldPos.X - playerScreenX, 2) + Math.Pow(worldPos.Y - playerScreenY, 2));
+                    if (distance < 50) // Click radius
                     {
-                        _mapData.SetTile(tileX, tileY, _selectedTerrainType);
+                        _isDraggingPlayer = true;
+                        _isDragging = true;
+                        _dragOffset = new PointF(worldPos.X - playerScreenX, worldPos.Y - playerScreenY);
                         Invalidate();
+                        return;
+                    }
+                }
+                
+                // Check if clicking on any enemy
+                foreach (var enemy in _mapData.MapData.Enemies)
+                {
+                    float enemyScreenX = enemy.X;
+                    float enemyScreenY = enemy.Y;
+                    float distance = (float)Math.Sqrt(Math.Pow(worldPos.X - enemyScreenX, 2) + Math.Pow(worldPos.Y - enemyScreenY, 2));
+                    if (distance < 50) // Click radius
+                    {
+                        _draggedEnemy = enemy;
+                        _isDragging = true;
+                        _dragOffset = new PointF(worldPos.X - enemyScreenX, worldPos.Y - enemyScreenY);
+                        Invalidate();
+                        return;
+                    }
+                }
+                
+                // If not dragging, treat as tile click
+                if (!_isDragging)
+                {
+                    // Use the hovered tile coordinates if available (matches the preview)
+                    if (_hoverTileX.HasValue && _hoverTileY.HasValue)
+                    {
+                        _mapData.SetTile(_hoverTileX.Value, _hoverTileY.Value, _selectedTerrainType);
+                        Invalidate();
+                    }
+                    else
+                    {
+                        // Fallback: calculate from mouse position
+                        var (tileX, tileY) = IsometricMath.ScreenToTile(worldPos.X, worldPos.Y);
+                        
+                        if (tileX >= 0 && tileX < _mapData.Width && tileY >= 0 && tileY < _mapData.Height)
+                        {
+                            _mapData.SetTile(tileX, tileY, _selectedTerrainType);
+                            Invalidate();
+                        }
                     }
                 }
             }
+        }
+
+        private void MapRenderControl_MouseUp(object? sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                _isDragging = false;
+                _isDraggingPlayer = false;
+                _draggedEnemy = null;
+                Invalidate();
+            }
+        }
+
+        private void MapRenderControl_MouseClick(object? sender, MouseEventArgs e)
+        {
+            // Click handling is now in MouseDown
         }
 
         private void DrawHoverPreview(Graphics g)
@@ -370,13 +463,65 @@ namespace Project9.Editor
             }
 
             // Draw hover preview
-            if (_hoverTileX.HasValue && _hoverTileY.HasValue)
+            if (_hoverTileX.HasValue && _hoverTileY.HasValue && !_isDragging)
             {
                 DrawHoverPreview(g);
             }
 
+            // Draw enemies
+            foreach (var enemy in _mapData.MapData.Enemies)
+            {
+                DrawEnemy(g, enemy, enemy == _draggedEnemy);
+            }
+
+            // Draw player
+            if (_mapData.MapData.Player != null)
+            {
+                DrawPlayer(g, _mapData.MapData.Player, _isDraggingPlayer);
+            }
+
             // Restore original transform
             g.Transform = originalTransform;
+        }
+
+        private void DrawEnemy(Graphics g, EnemyData enemy, bool isDragging)
+        {
+            float screenX = enemy.X;
+            float screenY = enemy.Y;
+            
+            // Draw enemy as a red square
+            using (SolidBrush brush = new SolidBrush(isDragging ? Color.Orange : Color.DarkRed))
+            {
+                RectangleF rect = new RectangleF(screenX - 16, screenY - 16, 32, 32);
+                g.FillRectangle(brush, rect);
+            }
+            
+            // Draw outline
+            using (Pen pen = new Pen(Color.White, 2))
+            {
+                RectangleF rect = new RectangleF(screenX - 16, screenY - 16, 32, 32);
+                g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
+            }
+        }
+
+        private void DrawPlayer(Graphics g, PlayerData player, bool isDragging)
+        {
+            float screenX = player.X;
+            float screenY = player.Y;
+            
+            // Draw player as a red square (slightly larger than enemy)
+            using (SolidBrush brush = new SolidBrush(isDragging ? Color.Yellow : Color.Red))
+            {
+                RectangleF rect = new RectangleF(screenX - 20, screenY - 20, 40, 40);
+                g.FillRectangle(brush, rect);
+            }
+            
+            // Draw outline
+            using (Pen pen = new Pen(Color.White, 2))
+            {
+                RectangleF rect = new RectangleF(screenX - 20, screenY - 20, 40, 40);
+                g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
+            }
         }
 
         protected override void OnResize(EventArgs e)

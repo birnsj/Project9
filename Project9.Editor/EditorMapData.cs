@@ -39,6 +39,7 @@ namespace Project9.Editor
                     if (loadedData != null)
                     {
                         _mapData = loadedData;
+                        MigrateLegacyCoordinates();
                         _filePath = resolvedPath;
                         Console.WriteLine($"[EditorMapData] Loaded map from {resolvedPath}: {_mapData.Width}x{_mapData.Height}, {_mapData.Tiles.Count} tiles");
                     }
@@ -77,6 +78,31 @@ namespace Project9.Editor
         public void SetTile(int x, int y, TerrainType terrainType)
         {
             _mapData.SetTile(x, y, terrainType);
+        }
+
+        private void MigrateLegacyCoordinates()
+        {
+            // Convert legacy tile coordinates to pixel coordinates
+            // If X/Y values are small (< 1000), they're likely tile coordinates
+            
+            // Migrate player
+            if (_mapData.Player != null && _mapData.Player.X < 1000 && _mapData.Player.Y < 1000)
+            {
+                var (screenX, screenY) = IsometricMath.TileToScreen((int)_mapData.Player.X, (int)_mapData.Player.Y);
+                _mapData.Player.X = screenX;
+                _mapData.Player.Y = screenY;
+            }
+            
+            // Migrate enemies
+            foreach (var enemy in _mapData.Enemies)
+            {
+                if (enemy.X < 1000 && enemy.Y < 1000)
+                {
+                    var (screenX, screenY) = IsometricMath.TileToScreen((int)enemy.X, (int)enemy.Y);
+                    enemy.X = screenX;
+                    enemy.Y = screenY;
+                }
+            }
         }
 
         private void CreateDefaultMap()

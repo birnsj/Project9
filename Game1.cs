@@ -38,6 +38,9 @@ namespace Project9
 
         protected override void Initialize()
         {
+            _graphics.PreferredBackBufferWidth = 1080;
+            _graphics.PreferredBackBufferHeight = 720;
+            _graphics.ApplyChanges();
             _camera = new Camera();
             base.Initialize();
         }
@@ -68,18 +71,26 @@ namespace Project9
                 GraphicsDevice.Viewport.Height / 2.0f
             );
 
-            // Initialize player at map center
-            Vector2 mapCenter = _map.GetMapCenter();
-            _player = new Player(mapCenter);
+            // Initialize player position from map data or default to map center
+            Vector2 playerPosition;
+            if (_map.MapData?.Player != null)
+            {
+                // Player position is now stored as pixel coordinates
+                playerPosition = new Vector2(_map.MapData.Player.X, _map.MapData.Player.Y);
+            }
+            else
+            {
+                playerPosition = _map.GetMapCenter();
+            }
+            _player = new Player(playerPosition);
 
             // Load enemies from map data
             if (_map.MapData?.Enemies != null)
             {
                 foreach (var enemyData in _map.MapData.Enemies)
                 {
-                    // Convert tile coordinates to world coordinates
-                    var (screenX, screenY) = IsometricMath.TileToScreen(enemyData.X, enemyData.Y);
-                    Vector2 enemyPosition = new Vector2(screenX, screenY);
+                    // Enemy position is now stored as pixel coordinates
+                    Vector2 enemyPosition = new Vector2(enemyData.X, enemyData.Y);
                     _enemies.Add(new Enemy(enemyPosition));
                 }
             }
