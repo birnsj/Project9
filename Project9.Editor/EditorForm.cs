@@ -1,6 +1,9 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Project9.Shared;
@@ -21,6 +24,7 @@ namespace Project9.Editor
         private bool _collisionMode = false;
         private ToolStripButton? _collisionButton = null!;
         private TrackBar? _opacitySlider = null;
+        private ComfyUISettings _comfyUISettings = null!;
 
         public EditorForm()
         {
@@ -56,6 +60,21 @@ namespace Project9.Editor
             fileMenu.DropDownItems.Add(saveAsMenuItem);
 
             _menuStrip.Items.Add(fileMenu);
+            
+            // Tools Menu
+            ToolStripMenuItem toolsMenu = new ToolStripMenuItem("Tools");
+            
+            ToolStripMenuItem comfyUIMenuItem = new ToolStripMenuItem("Generate Tiles from ComfyUI...");
+            comfyUIMenuItem.Click += ComfyUIMenuItem_Click;
+            toolsMenu.DropDownItems.Add(comfyUIMenuItem);
+            
+            toolsMenu.DropDownItems.Add(new ToolStripSeparator());
+            
+            ToolStripMenuItem comfyUISettingsMenuItem = new ToolStripMenuItem("ComfyUI Settings...");
+            comfyUISettingsMenuItem.Click += ComfyUISettingsMenuItem_Click;
+            toolsMenu.DropDownItems.Add(comfyUISettingsMenuItem);
+            
+            _menuStrip.Items.Add(toolsMenu);
             
             // About Menu
             ToolStripMenuItem aboutMenu = new ToolStripMenuItem("About");
@@ -189,6 +208,9 @@ namespace Project9.Editor
 
         private async void InitializeEditor()
         {
+            // Load ComfyUI settings
+            _comfyUISettings = ComfyUISettings.Load();
+            
             // Initialize map data and texture loader
             _mapData = new EditorMapData();
             _textureLoader = new TileTextureLoader();
@@ -343,6 +365,250 @@ namespace Project9.Editor
                     _mapRenderControl.ClearAllCollisionCells();
                     MessageBox.Show("All collision cells have been deleted.", "Delete All Collision", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
+            }
+        }
+
+        private void ComfyUISettingsMenuItem_Click(object? sender, EventArgs e)
+        {
+            using (ComfyUISettingsDialog settingsDialog = new ComfyUISettingsDialog(_comfyUISettings))
+            {
+                if (settingsDialog.ShowDialog() == DialogResult.OK)
+                {
+                    _comfyUISettings = settingsDialog.Settings;
+                    _comfyUISettings.Save();
+                }
+            }
+        }
+
+        private async void ComfyUIMenuItem_Click(object? sender, EventArgs e)
+        {
+            // Validate saved settings
+            string? workflowPath = null;
+            string? outputDirectory = null;
+
+            // Check workflow path
+            if (string.IsNullOrEmpty(_comfyUISettings.LastWorkflowPath) || !File.Exists(_comfyUISettings.LastWorkflowPath))
+            {
+                MessageBox.Show(
+                    "No workflow file is configured. Please configure it in ComfyUI Settings.",
+                    "ComfyUI Workflow",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+                
+                // Open settings dialog
+                using (ComfyUISettingsDialog settingsDialog = new ComfyUISettingsDialog(_comfyUISettings))
+                {
+                    if (settingsDialog.ShowDialog() == DialogResult.OK)
+                    {
+                        _comfyUISettings = settingsDialog.Settings;
+                        _comfyUISettings.Save();
+                    }
+                    else
+                    {
+                        return; // User cancelled settings
+                    }
+                }
+                
+                // Re-check after settings dialog
+                if (string.IsNullOrEmpty(_comfyUISettings.LastWorkflowPath) || !File.Exists(_comfyUISettings.LastWorkflowPath))
+                {
+                    MessageBox.Show(
+                        "Workflow file is still not configured. Please configure it in ComfyUI Settings.",
+                        "ComfyUI Workflow",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                    return;
+                }
+            }
+            
+            workflowPath = _comfyUISettings.LastWorkflowPath;
+
+            // Check output directory - default to content\sprites\tiles\comfy
+            if (string.IsNullOrEmpty(_comfyUISettings.LastOutputDirectory) || !Directory.Exists(_comfyUISettings.LastOutputDirectory))
+            {
+                // Use default: content\sprites\tiles\comfy
+                outputDirectory = Path.Combine(
+                    Directory.GetCurrentDirectory(),
+                    "Content",
+                    "sprites",
+                    "tiles",
+                    "comfy"
+                );
+                
+                // Create default directory if it doesn't exist
+                if (!Directory.Exists(outputDirectory))
+                {
+                    Directory.CreateDirectory(outputDirectory);
+                }
+                
+                // Save default if remember paths is enabled
+                if (_comfyUISettings.RememberPaths)
+                {
+                    _comfyUISettings.LastOutputDirectory = outputDirectory;
+                    _comfyUISettings.Save();
+                }
+            }
+            else
+            {
+                outputDirectory = _comfyUISettings.LastOutputDirectory;
+            }
+
+            // Show progress dialog and execute workflow
+            ComfyUIProgressDialog progressDialog = new ComfyUIProgressDialog();
+            ComfyUIServerManager? serverManager = null;
+            
+            try
+            {
+                // Show dialog first so user can see it
+                progressDialog.Show();
+                progressDialog.UpdateStatus("Initializing workflow execution...");
+                
+                // Check/start ComfyUI server if auto-start is enabled
+                if (_comfyUISettings.AutoStartComfyUI)
+                {
+                    serverManager = new ComfyUIServerManager(
+                        _comfyUISettings.ServerUrl,
+                        _comfyUISettings.ComfyUIPythonPath,
+                        _comfyUISettings.ComfyUIInstallPath
+                    );
+                    
+                    var progress = new Progress<string>(status => progressDialog.UpdateStatus(status));
+                    bool serverReady = await serverManager.EnsureServerRunningAsync(progress, progressDialog.CancellationToken);
+                    
+                    if (!serverReady)
+                    {
+                        progressDialog.SetError("Failed to start ComfyUI server. Please check your settings and ensure ComfyUI is installed correctly.");
+                        progressDialog.Hide();
+                        progressDialog.ShowDialog();
+                        progressDialog.Dispose();
+                        serverManager?.Dispose();
+                        return;
+                    }
+                }
+                else
+                {
+                    // Just check if server is running
+                    using (ComfyUIServerManager checkManager = new ComfyUIServerManager(
+                        _comfyUISettings.ServerUrl,
+                        null,
+                        null))
+                    {
+                        progressDialog.UpdateStatus("Checking if ComfyUI server is running...");
+                        bool isRunning = await checkManager.IsServerRunningAsync(progressDialog.CancellationToken);
+                        
+                        if (!isRunning)
+                        {
+                            DialogResult result = MessageBox.Show(
+                                "ComfyUI server does not appear to be running.\n\n" +
+                                "Would you like to enable auto-start in ComfyUI Settings?\n\n" +
+                                "Click 'Yes' to open settings, or 'No' to try anyway.",
+                                "ComfyUI Server Not Running",
+                                MessageBoxButtons.YesNo,
+                                MessageBoxIcon.Warning
+                            );
+                            
+                            if (result == DialogResult.Yes)
+                            {
+                                progressDialog.Hide();
+                                using (ComfyUISettingsDialog settingsDialog = new ComfyUISettingsDialog(_comfyUISettings))
+                                {
+                                    if (settingsDialog.ShowDialog() == DialogResult.OK)
+                                    {
+                                        _comfyUISettings = settingsDialog.Settings;
+                                        _comfyUISettings.Save();
+                                    }
+                                }
+                                progressDialog.Dispose();
+                                return;
+                            }
+                        }
+                    }
+                }
+                
+                // Open ComfyUI in browser so user can see the workflow running
+                try
+                {
+                    string serverUrl = _comfyUISettings.ServerUrl;
+                    if (string.IsNullOrEmpty(serverUrl))
+                    {
+                        serverUrl = "http://localhost:8188";
+                    }
+                    
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = serverUrl,
+                        UseShellExecute = true
+                    });
+                    
+                    progressDialog.UpdateStatus("Opened ComfyUI in browser. Workflow will be queued...");
+                }
+                catch
+                {
+                    // If opening browser fails, continue anyway
+                }
+                
+                // Start async execution
+                Task<ExecutionResult> executionTask;
+                
+                using (ComfyUIWorkflowExecutor executor = new ComfyUIWorkflowExecutor(_comfyUISettings.ServerUrl))
+                {
+                    var progress = new Progress<string>(status => progressDialog.UpdateStatus(status));
+                    
+                    executionTask = executor.ExecuteWorkflowAsync(
+                        workflowPath,
+                        outputDirectory,
+                        progress,
+                        progressDialog.CancellationToken
+                    );
+                    
+                    // Wait for execution to complete
+                    ExecutionResult result = await executionTask;
+
+                    if (result.Success)
+                    {
+                        progressDialog.SetCompleted();
+                        
+                        // Wait a moment so user can see completion
+                        await Task.Delay(500);
+                        
+                        // Close the progress dialog
+                        progressDialog.Hide();
+                        progressDialog.Dispose();
+                        
+                        MessageBox.Show(
+                            $"Workflow completed successfully!\n\nTiles saved to:\n{outputDirectory}",
+                            "ComfyUI Workflow",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information
+                        );
+                        
+                        // Optionally refresh texture loader
+                        _textureLoader?.LoadTextures();
+                        _mapRenderControl?.Invalidate();
+                    }
+                    else
+                    {
+                        progressDialog.SetError(result.ErrorMessage ?? "Unknown error occurred");
+                        // Hide first, then show modally so user can see the error and close it
+                        progressDialog.Hide();
+                        progressDialog.ShowDialog();
+                        progressDialog.Dispose();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                progressDialog.SetError($"Error: {ex.Message}\n\nStack trace: {ex.StackTrace}");
+                // Hide first, then show modally so user can see the error and close it
+                progressDialog.Hide();
+                progressDialog.ShowDialog();
+                progressDialog.Dispose();
+            }
+            finally
+            {
+                serverManager?.Dispose();
             }
         }
 
