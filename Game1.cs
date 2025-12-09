@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
@@ -29,7 +30,10 @@ namespace Project9
         private Vector2 _screenCenter;
         private bool _cameraFollowingPlayer = true;
         private bool _showGrid64x32 = false;
+        private bool _showCollision = true; // Default to showing collision
         private Texture2D? _gridLineTexture;
+        private List<CollisionCellData> _collisionCells = new List<CollisionCellData>();
+        private Texture2D? _collisionDiamondTexture;
 
         public Game1()
         {
@@ -85,6 +89,9 @@ namespace Project9
                 playerPosition = _map.GetMapCenter();
             }
             _player = new Player(playerPosition);
+
+            // Load collision cells
+            LoadCollisionCells();
 
             // Load enemies from map data
             if (_map.MapData?.Enemies != null)
@@ -209,6 +216,13 @@ namespace Project9
                 _showGrid64x32 = !_showGrid64x32;
             }
 
+            // Handle C key to toggle collision visibility
+            if (currentKeyboardState.IsKeyDown(Keys.C) && 
+                !_previousKeyboardState.IsKeyDown(Keys.C))
+            {
+                _showCollision = !_showCollision;
+            }
+
             // Handle WASD for camera panning
             Vector2 panDirection = Vector2.Zero;
             if (currentKeyboardState.IsKeyDown(Keys.W))
@@ -228,15 +242,33 @@ namespace Project9
                 _camera.Pan(panDirection, deltaTime);
             }
 
-            // Handle mouse wheel for zoom
+            // Handle mouse wheel for zoom (centered on mouse cursor)
             int scrollDelta = currentMouseState.ScrollWheelValue - _previousMouseState.ScrollWheelValue;
             if (scrollDelta != 0)
             {
-                float zoomAmount = scrollDelta > 0 ? 0.1f : -0.1f;
-                if (zoomAmount > 0)
-                    _camera.ZoomIn(zoomAmount);
-                else
-                    _camera.ZoomOut(Math.Abs(zoomAmount));
+                // Get mouse position in screen coordinates
+                Vector2 zoomMouseScreenPos = new Vector2(currentMouseState.X, currentMouseState.Y);
+                
+                // Convert to world coordinates before zoom
+                Vector2 mouseWorldBefore = ScreenToWorld(zoomMouseScreenPos);
+                
+                // Calculate zoom amount (use percentage-based zoom for smoother feel)
+                float zoomFactor = scrollDelta > 0 ? 1.1f : 1.0f / 1.1f;
+                float oldZoom = _camera.Zoom;
+                float newZoom = MathHelper.Clamp(oldZoom * zoomFactor, 0.5f, 4.0f);
+                
+                // Only apply if zoom actually changed (within limits)
+                if (Math.Abs(newZoom - oldZoom) > 0.001f)
+                {
+                    _camera.Zoom = newZoom;
+                    
+                    // Convert mouse position to world coordinates after zoom
+                    Vector2 mouseWorldAfter = ScreenToWorld(zoomMouseScreenPos);
+                    
+                    // Adjust camera position to keep the mouse point in the same world position
+                    Vector2 worldOffset = mouseWorldBefore - mouseWorldAfter;
+                    _camera.Position += worldOffset;
+                }
             }
 
             // Handle mouse input for player movement
@@ -272,30 +304,26 @@ namespace Project9
                 if (!attackedEnemy)
                 {
                     // Move to clicked position
-                    _player.SetTarget(mouseWorldPos);
+                    _player.SetTarget(mouseWorldPos, CheckCollision);
                 }
             }
 
-            // Left button held: follow mouse cursor
+            // Left button held: follow mouse cursor (only if button was already held last frame)
             Vector2? followPosition = null;
-            if (currentMouseState.LeftButton == ButtonState.Pressed)
+            if (currentMouseState.LeftButton == ButtonState.Pressed && 
+                _previousMouseState.LeftButton == ButtonState.Pressed)
             {
+                // Button is being held (not just clicked) - follow mouse
                 followPosition = mouseWorldPos;
             }
-            else if (currentMouseState.LeftButton == ButtonState.Released && 
-                     _previousMouseState.LeftButton == ButtonState.Pressed)
-            {
-                // Button released - stop the player completely
-                _player.ClearTarget();
-            }
 
-            // Update player movement
-            _player.Update(followPosition, deltaTime);
+            // Update player movement with collision checking for pathfinding
+            _player.Update(followPosition, deltaTime, (pos) => CheckCollision(pos), (from, to) => IsLineOfSightBlocked(from, to));
 
-            // Update all enemies AI (chase and attack player) - pass sneaking state
+            // Update all enemies AI (chase and attack player) - pass sneaking state and collision check
             foreach (var enemy in _enemies)
             {
-                enemy.Update(_player.Position, deltaTime, _player.IsSneaking);
+                enemy.Update(_player.Position, deltaTime, _player.IsSneaking, (pos) => CheckCollision(pos), (from, to) => IsLineOfSightBlocked(from, to));
 
                 // Check if enemy hits player
                 Vector2 enemyToPlayer = _player.Position - enemy.Position;
@@ -374,6 +402,12 @@ namespace Project9
             // Draw player
             _player.Draw(_spriteBatch);
 
+            // Draw collision cells (if enabled)
+            if (_showCollision)
+            {
+                DrawCollisionCells(_spriteBatch);
+            }
+
             _spriteBatch.End();
 
             // Draw version number in lower right corner
@@ -418,6 +452,116 @@ namespace Project9
             // So: world = screen / zoom + position
             Vector2 worldPos = screenPosition / _camera.Zoom + _camera.Position;
             return worldPos;
+        }
+
+        private void LoadCollisionCells()
+        {
+            const string collisionPath = "Content/world/collision.json";
+            string? resolvedPath = ResolveCollisionPath(collisionPath);
+            
+            if (resolvedPath != null && File.Exists(resolvedPath))
+            {
+                try
+                {
+                    string json = File.ReadAllText(resolvedPath);
+                    var collisionData = System.Text.Json.JsonSerializer.Deserialize<CollisionData>(json);
+                    if (collisionData?.Cells != null)
+                    {
+                        _collisionCells = collisionData.Cells;
+                        Console.WriteLine($"[Game1] Loaded {_collisionCells.Count} collision cells");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Game1] Error loading collision cells: {ex.Message}");
+                }
+            }
+        }
+
+        private static string? ResolveCollisionPath(string relativePath)
+        {
+            string currentDir = Directory.GetCurrentDirectory();
+            string fullPath = Path.GetFullPath(Path.Combine(currentDir, relativePath));
+            if (File.Exists(fullPath))
+                return fullPath;
+
+            string exeDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) ?? AppContext.BaseDirectory;
+            fullPath = Path.GetFullPath(Path.Combine(exeDir, relativePath));
+            if (File.Exists(fullPath))
+                return fullPath;
+
+            var dir = new DirectoryInfo(exeDir);
+            while (dir != null && dir.Parent != null)
+            {
+                string testPath = Path.GetFullPath(Path.Combine(dir.FullName, relativePath));
+                if (File.Exists(testPath))
+                    return testPath;
+                dir = dir.Parent;
+            }
+
+            return null;
+        }
+
+        private bool CheckCollision(Vector2 position)
+        {
+            const float halfWidth = 32.0f;  // 64/2 = 32
+            const float halfHeight = 16.0f; // 32/2 = 16
+
+            // Check center and 4 corners of the player diamond for collision
+            // This is more accurate than single point but not overly sensitive
+            Vector2[] checkPoints = new Vector2[]
+            {
+                position, // Center
+                new Vector2(position.X, position.Y - halfHeight), // Top
+                new Vector2(position.X + halfWidth, position.Y), // Right
+                new Vector2(position.X, position.Y + halfHeight), // Bottom
+                new Vector2(position.X - halfWidth, position.Y)  // Left
+            };
+
+            foreach (var cell in _collisionCells)
+            {
+                // Check if any of the player's key points are inside the collision cell diamond
+                foreach (var checkPoint in checkPoints)
+                {
+                    float dx = Math.Abs(checkPoint.X - cell.X);
+                    float dy = Math.Abs(checkPoint.Y - cell.Y);
+                    float normalizedX = dx / halfWidth;
+                    float normalizedY = dy / halfHeight;
+                    
+                    // Check if point is inside diamond: |x-cx|/hw + |y-cy|/hh <= 1
+                    // Use a small tolerance to prevent edge cases
+                    if (normalizedX + normalizedY <= 1.01f)
+                    {
+                        return true; // Collision detected
+                    }
+                }
+            }
+            
+            return false;
+        }
+
+        private bool IsLineOfSightBlocked(Vector2 from, Vector2 to)
+        {
+            // Check if line of sight is blocked by collision cells
+            // Sample points along the line
+            Vector2 direction = to - from;
+            float distance = direction.Length();
+            direction.Normalize();
+            
+            // Sample every 16 pixels along the line
+            int samples = (int)(distance / 16.0f) + 1;
+            for (int i = 0; i <= samples; i++)
+            {
+                float t = (float)i / samples;
+                Vector2 samplePoint = from + direction * (distance * t);
+                
+                if (CheckCollision(samplePoint))
+                {
+                    return true; // Line of sight is blocked
+                }
+            }
+            
+            return false; // Line of sight is clear
         }
 
         private void CreateGridLineTexture(GraphicsDevice graphicsDevice)
@@ -537,6 +681,55 @@ namespace Project9
                 SpriteEffects.None,
                 0.0f
             );
+        }
+
+        private void CreateCollisionDiamondTexture(GraphicsDevice graphicsDevice)
+        {
+            int halfWidth = 32;
+            int halfHeight = 16;
+            int width = halfWidth * 2;
+            int height = halfHeight * 2;
+            
+            _collisionDiamondTexture = new Texture2D(graphicsDevice, width, height);
+            Color[] colorData = new Color[width * height];
+            
+            Vector2 center = new Vector2(halfWidth, halfHeight);
+            
+            for (int x = 0; x < width; x++)
+            {
+                for (int y = 0; y < height; y++)
+                {
+                    float dx = Math.Abs(x - center.X);
+                    float dy = Math.Abs(y - center.Y);
+                    float normalizedX = dx / halfWidth;
+                    float normalizedY = dy / halfHeight;
+                    
+                    if (normalizedX + normalizedY <= 1.0f)
+                    {
+                        colorData[y * width + x] = new Color(128, 0, 128, 180); // Purple with transparency
+                    }
+                    else
+                    {
+                        colorData[y * width + x] = Color.Transparent;
+                    }
+                }
+            }
+            
+            _collisionDiamondTexture.SetData(colorData);
+        }
+
+        private void DrawCollisionCells(SpriteBatch spriteBatch)
+        {
+            if (_collisionDiamondTexture == null)
+            {
+                CreateCollisionDiamondTexture(spriteBatch.GraphicsDevice);
+            }
+
+            foreach (var cell in _collisionCells)
+            {
+                Vector2 drawPosition = new Vector2(cell.X, cell.Y) - new Vector2(32, 16);
+                spriteBatch.Draw(_collisionDiamondTexture, drawPosition, Color.White);
+            }
         }
     }
 }

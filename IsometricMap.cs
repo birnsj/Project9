@@ -34,13 +34,34 @@ namespace Project9
 
         private void LoadTextures(ContentManager content)
         {
-            // Load terrain textures from Content/sprites/tiles/template
+            // Load terrain textures from Content/sprites/tiles/template or test folder
             foreach (TerrainType terrainType in Enum.GetValues<TerrainType>())
             {
-                string texturePath = $"sprites/tiles/template/{terrainType}";
+                string texturePath;
+                // Test tile is in the test folder, others are in template folder
+                if (terrainType == TerrainType.Test)
+                {
+                    texturePath = $"sprites/tiles/test/{terrainType}";
+                }
+                else
+                {
+                    texturePath = $"sprites/tiles/template/{terrainType}";
+                }
+                
                 Console.WriteLine($"[IsometricMap] Loading texture: {texturePath}");
-                _terrainTextures[terrainType] = content.Load<Texture2D>(texturePath);
-                Console.WriteLine($"[IsometricMap] Successfully loaded {terrainType} - Size: {_terrainTextures[terrainType].Width}x{_terrainTextures[terrainType].Height}");
+                try
+                {
+                    _terrainTextures[terrainType] = content.Load<Texture2D>(texturePath);
+                    Console.WriteLine($"[IsometricMap] Successfully loaded {terrainType} - Size: {_terrainTextures[terrainType].Width}x{_terrainTextures[terrainType].Height}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[IsometricMap] Failed to load {terrainType} from {texturePath}: {ex.Message}");
+                    // Create a placeholder texture if loading fails
+                    Texture2D placeholder = new Texture2D(_graphicsDevice, 1, 1);
+                    placeholder.SetData(new[] { Color.Magenta });
+                    _terrainTextures[terrainType] = placeholder;
+                }
             }
         }
 
@@ -77,10 +98,11 @@ namespace Project9
                             if (_terrainTextures.ContainsKey(tileData.TerrainType))
                             {
                                 var texture = _terrainTextures[tileData.TerrainType];
-                                var tile = new IsometricTile(tileData.X, tileData.Y, texture)
-                                {
-                                    TintColor = Color.White
-                                };
+                                var tile = new IsometricTile(tileData.X, tileData.Y, texture, tileData.TerrainType);
+                                
+                                // All tiles are fully opaque
+                                tile.TintColor = Color.White;
+                                
                                 _tiles.Add(tile);
                             }
                         }
@@ -144,7 +166,7 @@ namespace Project9
                 for (int y = 0; y < _mapHeight; y++)
                 {
                     var texture = _terrainTextures[TerrainType.Grass];
-                    var tile = new IsometricTile(x, y, texture)
+                    var tile = new IsometricTile(x, y, texture, TerrainType.Grass)
                     {
                         TintColor = Color.White
                     };

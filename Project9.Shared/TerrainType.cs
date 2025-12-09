@@ -7,6 +7,7 @@ namespace Project9.Shared
         Stone,
         Sand,
         Forest,
-        Dirt
+        Dirt,
+        Test
     }
 }

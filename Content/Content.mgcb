@@ -63,4 +63,11 @@
 
 #end
 
+#begin sprites/tiles/test/Test.png
+/importer:TextureImporter
+/processor:TextureProcessor
+/build:sprites/tiles/test/Test.png
+
+#end
+
 #end

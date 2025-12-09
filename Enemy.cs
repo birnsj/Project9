@@ -1,6 +1,8 @@
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace Project9
 {
@@ -39,6 +41,12 @@ namespace Project9
         private float _behaviorChangeInterval; // How often to change behavior
         private bool _isRotating; // Whether currently rotating
         private Random _random;
+        private Vector2? _waypoint; // Intermediate waypoint for pathfinding around obstacles
+        private List<Vector2> _path; // Path of waypoints to follow
+        private float _stuckTimer; // Timer to detect if enemy is stuck
+        private int _preferredSlideDirection; // -1 for left, 1 for right, 0 for no preference
+        private const float STUCK_THRESHOLD = 0.5f; // Seconds before considering stuck
+        private const float GRID_SIZE = 16.0f; // Grid cell size for pathfinding (balanced precision)
 
         public Vector2 Position
         {
@@ -76,6 +84,7 @@ namespace Project9
             _flashTime = 0.0f;
             _isFlashing = false;
             _hasDetectedPlayer = false;
+            _path = new List<Vector2>();
             
             // Initialize rotation and sight cone
             _random = new Random();
@@ -88,6 +97,8 @@ namespace Project9
             _isRotating = _random.Next(2) == 0; // Randomly start rotating or still
             _exclamationTimer = 0.0f;
             _exclamationDuration = 1.0f; // Show exclamation for 1 second
+            _waypoint = null;
+            _stuckTimer = 0.0f;
             
             // Create sight cone texture
             // Note: GraphicsDevice will be available when Draw is first called
@@ -123,7 +134,7 @@ namespace Project9
             return angleDiff <= _sightConeAngle / 2.0f;
         }
 
-        public void Update(Vector2 playerPosition, float deltaTime, bool playerIsSneaking = false)
+        public void Update(Vector2 playerPosition, float deltaTime, bool playerIsSneaking = false, Func<Vector2, bool>? checkCollision = null, Func<Vector2, Vector2, bool>? checkLineOfSight = null)
         {
             // Update flash timer
             if (_isFlashing)
@@ -174,11 +185,14 @@ namespace Project9
             
             if (playerInRange)
             {
+                // Check if line of sight is blocked by collision
+                bool lineOfSightBlocked = checkLineOfSight != null && checkLineOfSight(_position, playerPosition);
+                
                 // If player is sneaking and in the reduced range, also check sight cone
                 if (playerIsSneaking && distanceToPlayer <= effectiveDetectionRange && !_hasDetectedPlayer)
                 {
-                    // Check if player is in sight cone
-                    if (IsPointInSightCone(playerPosition))
+                    // Check if player is in sight cone and line of sight is not blocked
+                    if (IsPointInSightCone(playerPosition) && !lineOfSightBlocked)
                     {
                         _hasDetectedPlayer = true;
                         _exclamationTimer = _exclamationDuration;
@@ -187,11 +201,15 @@ namespace Project9
                 else
                 {
                     // Normal detection (not sneaking or already detected)
-                    if (!_hasDetectedPlayer)
+                    // Only detect if line of sight is not blocked
+                    if (!lineOfSightBlocked)
                     {
-                        _exclamationTimer = _exclamationDuration;
+                        if (!_hasDetectedPlayer)
+                        {
+                            _exclamationTimer = _exclamationDuration;
+                        }
+                        _hasDetectedPlayer = true;
                     }
-                    _hasDetectedPlayer = true;
                 }
             }
 
@@ -216,8 +234,108 @@ namespace Project9
                 }
                 else
                 {
-                    // Chase the player
+                    // Chase the player - check if direct path is clear first
                     _isAttacking = false;
+                    
+                    // Calculate target position (player position, but stop at attack range)
+                    Vector2 chaseTarget = playerPosition;
+                    if (distanceToPlayer > _attackRange)
+                    {
+                        // Target is player position, but we'll stop at attack range
+                        chaseTarget = playerPosition;
+                    }
+                    else
+                    {
+                        // Already in attack range, don't move
+                        return;
+                    }
+                    
+                    // First check if direct path is clear - only use pathfinding if blocked
+                    bool pathClear = true;
+                    if (checkCollision != null)
+                    {
+                        Vector2 direction = chaseTarget - _position;
+                        float distance = direction.Length();
+                        int samples = (int)(distance / 16.0f) + 1;
+                        for (int i = 0; i <= samples; i++)
+                        {
+                            float t = (float)i / samples;
+                            Vector2 samplePoint = _position + (chaseTarget - _position) * t;
+                            if (checkCollision(samplePoint))
+                            {
+                                pathClear = false;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Only use pathfinding if direct path is blocked
+                    if (!pathClear && (_path == null || _path.Count == 0) && checkCollision != null)
+                    {
+                        // Find path using A*
+                        _path = FindPath(_position, chaseTarget, checkCollision);
+                    }
+                    else if (pathClear)
+                    {
+                        // Clear path - clear any existing pathfinding path
+                        _path = new List<Vector2>();
+                    }
+                    
+                    // Use pathfinding path if available
+                    if (_path != null && _path.Count > 0)
+                    {
+                        // Remove waypoints we've passed
+                        while (_path.Count > 0)
+                        {
+                            float distToNext = Vector2.Distance(_position, _path[0]);
+                            if (distToNext < 10.0f)
+                            {
+                                _path.RemoveAt(0);
+                            }
+                            else
+                            {
+                                break;
+                            }
+                        }
+                        
+                        // Use next waypoint in path if available
+                        if (_path.Count > 0)
+                        {
+                            Vector2 directionToWaypoint = _path[0] - _position;
+                            float distanceToWaypoint = directionToWaypoint.Length();
+                            
+                            if (distanceToWaypoint > 5.0f)
+                            {
+                                directionToWaypoint.Normalize();
+                                float waypointMoveDistance = _chaseSpeed * deltaTime;
+                                if (waypointMoveDistance > distanceToWaypoint)
+                                {
+                                    waypointMoveDistance = distanceToWaypoint;
+                                }
+                                
+                                Vector2 waypointNewPosition = _position + directionToWaypoint * waypointMoveDistance;
+                                if (checkCollision == null || !checkCollision(waypointNewPosition))
+                                {
+                                    _position = waypointNewPosition;
+                                    _stuckTimer = 0.0f;
+                                }
+                                else
+                                {
+                                    // Waypoint path blocked - recalculate path
+                                    _path = FindPath(_position, chaseTarget, checkCollision);
+                                    _stuckTimer += deltaTime;
+                                }
+                            }
+                            else
+                            {
+                                // Reached waypoint - remove it
+                                _path.RemoveAt(0);
+                            }
+                            return; // Exit early after pathfinding movement
+                        }
+                    }
+                    
+                    // Direct movement (when path is clear or pathfinding not needed)
                     directionToPlayer.Normalize();
                     float moveDistance = _chaseSpeed * deltaTime;
                     
@@ -229,7 +347,100 @@ namespace Project9
 
                     if (moveDistance > 0)
                     {
-                        _position += directionToPlayer * moveDistance;
+                        Vector2 newPosition = _position + directionToPlayer * moveDistance;
+                        if (checkCollision == null || !checkCollision(newPosition))
+                        {
+                            _position = newPosition;
+                            _stuckTimer = 0.0f;
+                        }
+                        else
+                        {
+                            // Hit collision - try sliding along the edge
+                            Vector2 slidePosition = TrySlideAlongCollision(_position, newPosition, directionToPlayer, moveDistance, checkCollision);
+                            if (slidePosition != _position)
+                            {
+                                _position = slidePosition;
+                                _stuckTimer = 0.0f;
+                            }
+                            else
+                            {
+                                // Can't slide - start pathfinding
+                                if ((_path == null || _path.Count == 0) && checkCollision != null)
+                                {
+                                    _path = FindPath(_position, chaseTarget, checkCollision);
+                                }
+                                
+                                // Fallback: try to find a waypoint
+                                if ((_path == null || _path.Count == 0) && !_waypoint.HasValue)
+                                {
+                                    _waypoint = FindWaypointAroundObstacle(_position, playerPosition, checkCollision);
+                                }
+                            }
+                            
+                            if (_waypoint.HasValue)
+                            {
+                                // Move toward waypoint instead
+                                Vector2 directionToWaypoint = _waypoint.Value - _position;
+                                float distanceToWaypoint = directionToWaypoint.Length();
+                                
+                                if (distanceToWaypoint > 5.0f)
+                                {
+                                    directionToWaypoint.Normalize();
+                                    float waypointMoveDistance = _chaseSpeed * deltaTime;
+                                    if (waypointMoveDistance > distanceToWaypoint)
+                                    {
+                                        waypointMoveDistance = distanceToWaypoint;
+                                    }
+                                    
+                                    Vector2 waypointNewPosition = _position + directionToWaypoint * waypointMoveDistance;
+                                    if (checkCollision == null || !checkCollision(waypointNewPosition))
+                                    {
+                                        _position = waypointNewPosition;
+                                        _stuckTimer = 0.0f;
+                                    }
+                                    else
+                                    {
+                                        // Waypoint path also blocked - clear it and try again next frame
+                                        _waypoint = null;
+                                        _stuckTimer += deltaTime;
+                                    }
+                                }
+                                else
+                                {
+                                    // Reached waypoint - clear it
+                                    _waypoint = null;
+                                }
+                            }
+                            else
+                            {
+                                // Can't find a path - try immediate obstacle avoidance
+                                Vector2 perpLeft = new Vector2(-directionToPlayer.Y, directionToPlayer.X);
+                                Vector2 perpRight = new Vector2(directionToPlayer.Y, -directionToPlayer.X);
+                                
+                                // Try left
+                                Vector2 avoidLeft = _position + perpLeft * (_chaseSpeed * deltaTime);
+                                if (checkCollision == null || !checkCollision(avoidLeft))
+                                {
+                                    _position = avoidLeft;
+                                    _stuckTimer = 0.0f;
+                                }
+                                else
+                                {
+                                    // Try right
+                                    Vector2 avoidRight = _position + perpRight * (_chaseSpeed * deltaTime);
+                                    if (checkCollision == null || !checkCollision(avoidRight))
+                                    {
+                                        _position = avoidRight;
+                                        _stuckTimer = 0.0f;
+                                    }
+                                    else
+                                    {
+                                        // Can't move - stuck
+                                        _stuckTimer += deltaTime;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 
@@ -247,9 +458,95 @@ namespace Project9
                 Vector2 directionToOriginal = _originalPosition - _position;
                 float distanceToOriginal = directionToOriginal.Length();
                 
-                // Move back to original position
+                // Move back to original position - check if direct path is clear first
                 if (distanceToOriginal > 5.0f) // Stop threshold
                 {
+                    // First check if direct path is clear
+                    bool pathClear = true;
+                    if (checkCollision != null)
+                    {
+                        Vector2 direction = _originalPosition - _position;
+                        float distance = direction.Length();
+                        int samples = (int)(distance / 16.0f) + 1;
+                        for (int i = 0; i <= samples; i++)
+                        {
+                            float t = (float)i / samples;
+                            Vector2 samplePoint = _position + (_originalPosition - _position) * t;
+                            if (checkCollision(samplePoint))
+                            {
+                                pathClear = false;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Only use pathfinding if direct path is blocked
+                    if (!pathClear && (_path == null || _path.Count == 0) && checkCollision != null)
+                    {
+                        // Find path using A*
+                        _path = FindPath(_position, _originalPosition, checkCollision);
+                    }
+                    else if (pathClear)
+                    {
+                        // Clear path - clear any existing pathfinding path
+                        _path = new List<Vector2>();
+                    }
+                    
+                    // Use pathfinding path if available
+                    if (_path != null && _path.Count > 0)
+                    {
+                        // Remove waypoints we've passed
+                        while (_path.Count > 0)
+                        {
+                            float distToNext = Vector2.Distance(_position, _path[0]);
+                            if (distToNext < 10.0f)
+                            {
+                                _path.RemoveAt(0);
+                            }
+                            else
+                            {
+                                break;
+                            }
+                        }
+                        
+                        // Use next waypoint in path if available
+                        if (_path.Count > 0)
+                        {
+                            Vector2 directionToWaypoint = _path[0] - _position;
+                            float distanceToWaypoint = directionToWaypoint.Length();
+                            
+                            if (distanceToWaypoint > 5.0f)
+                            {
+                                directionToWaypoint.Normalize();
+                                float waypointMoveDistance = _chaseSpeed * deltaTime;
+                                if (waypointMoveDistance > distanceToWaypoint)
+                                {
+                                    waypointMoveDistance = distanceToWaypoint;
+                                }
+                                
+                                Vector2 waypointNewPosition = _position + directionToWaypoint * waypointMoveDistance;
+                                if (checkCollision == null || !checkCollision(waypointNewPosition))
+                                {
+                                    _position = waypointNewPosition;
+                                    _stuckTimer = 0.0f;
+                                }
+                                else
+                                {
+                                    // Waypoint path blocked - recalculate path
+                                    _path = FindPath(_position, _originalPosition, checkCollision);
+                                    _stuckTimer += deltaTime;
+                                }
+                            }
+                            else
+                            {
+                                // Reached waypoint - remove it
+                                _path.RemoveAt(0);
+                            }
+                            return; // Exit early after pathfinding movement
+                        }
+                    }
+                    
+                    // Fallback: if pathfinding failed, try direct movement
                     directionToOriginal.Normalize();
                     float moveDistance = _chaseSpeed * deltaTime;
                     
@@ -259,7 +556,68 @@ namespace Project9
                         moveDistance = distanceToOriginal;
                     }
                     
-                    _position += directionToOriginal * moveDistance;
+                    Vector2 newPosition = _position + directionToOriginal * moveDistance;
+                    if (checkCollision == null || !checkCollision(newPosition))
+                    {
+                        _position = newPosition;
+                        _stuckTimer = 0.0f;
+                        _preferredSlideDirection = 0; // Reset preference when moving freely
+                    }
+                    else
+                    {
+                        // Hit collision - try sliding along the edge
+                        Vector2 slidePosition = TrySlideAlongCollision(_position, newPosition, directionToOriginal, moveDistance, checkCollision);
+                        if (slidePosition != _position)
+                        {
+                            _position = slidePosition;
+                            _stuckTimer = 0.0f;
+                        }
+                        else
+                        {
+                            // Can't slide - reset preference and try to find a waypoint
+                            _preferredSlideDirection = 0;
+                            if (!_waypoint.HasValue)
+                            {
+                                _waypoint = FindWaypointAroundObstacle(_position, _originalPosition, checkCollision);
+                            }
+                        }
+                        
+                        if (_waypoint.HasValue)
+                        {
+                            Vector2 directionToWaypoint = _waypoint.Value - _position;
+                            float distanceToWaypoint = directionToWaypoint.Length();
+                            
+                            if (distanceToWaypoint > 5.0f)
+                            {
+                                directionToWaypoint.Normalize();
+                                float waypointMoveDistance = _chaseSpeed * deltaTime;
+                                if (waypointMoveDistance > distanceToWaypoint)
+                                {
+                                    waypointMoveDistance = distanceToWaypoint;
+                                }
+                                
+                                Vector2 waypointNewPosition = _position + directionToWaypoint * waypointMoveDistance;
+                                if (checkCollision == null || !checkCollision(waypointNewPosition))
+                                {
+                                    _position = waypointNewPosition;
+                                    _stuckTimer = 0.0f;
+                                }
+                                else
+                                {
+                                    _waypoint = null;
+                                    _stuckTimer += deltaTime;
+                                }
+                            }
+                            else
+                            {
+                                _waypoint = null;
+                            }
+                        }
+                        else
+                        {
+                            _stuckTimer += deltaTime;
+                        }
+                    }
                     
                     // Face the direction of movement
                     _rotation = (float)Math.Atan2(directionToOriginal.Y, directionToOriginal.X);
@@ -312,7 +670,60 @@ namespace Project9
                         moveDistance = distanceToOriginal;
                     }
                     
-                    _position += directionToOriginal * moveDistance;
+                    Vector2 newPosition = _position + directionToOriginal * moveDistance;
+                    
+                    // Check collision before moving - use pathfinding if blocked
+                    if (checkCollision == null || !checkCollision(newPosition))
+                    {
+                        _position = newPosition;
+                        _stuckTimer = 0.0f;
+                        _waypoint = null;
+                    }
+                    else
+                    {
+                        // Path is blocked - try to find a way around
+                        if (!_waypoint.HasValue)
+                        {
+                            _waypoint = FindWaypointAroundObstacle(_position, _originalPosition, checkCollision);
+                        }
+                        
+                        if (_waypoint.HasValue)
+                        {
+                            // Move toward waypoint instead
+                            Vector2 directionToWaypoint = _waypoint.Value - _position;
+                            float distanceToWaypoint = directionToWaypoint.Length();
+                            
+                            if (distanceToWaypoint > 5.0f)
+                            {
+                                directionToWaypoint.Normalize();
+                                float waypointMoveDistance = _chaseSpeed * deltaTime;
+                                if (waypointMoveDistance > distanceToWaypoint)
+                                {
+                                    waypointMoveDistance = distanceToWaypoint;
+                                }
+                                
+                                Vector2 waypointNewPosition = _position + directionToWaypoint * waypointMoveDistance;
+                                if (checkCollision == null || !checkCollision(waypointNewPosition))
+                                {
+                                    _position = waypointNewPosition;
+                                    _stuckTimer = 0.0f;
+                                }
+                                else
+                                {
+                                    _waypoint = null;
+                                    _stuckTimer += deltaTime;
+                                }
+                            }
+                            else
+                            {
+                                _waypoint = null;
+                            }
+                        }
+                        else
+                        {
+                            _stuckTimer += deltaTime;
+                        }
+                    }
                     
                     // Face the direction of movement
                     _rotation = (float)Math.Atan2(directionToOriginal.Y, directionToOriginal.X);
@@ -593,8 +1004,8 @@ namespace Project9
                 spriteBatch.Draw(_diamondTexture, drawPosition, drawColor);
             }
             
-            // Draw exclamation mark if just detected player
-            if (_exclamationTimer > 0.0f)
+            // Draw exclamation mark if player is detected (show the whole time)
+            if (_hasDetectedPlayer)
             {
                 if (_exclamationTexture == null)
                 {
@@ -605,12 +1016,395 @@ namespace Project9
                 {
                     // Draw exclamation above enemy head
                     Vector2 exclamationPos = _position - new Vector2(_exclamationTexture.Width / 2.0f, _size + 10);
-                    // Make it flash/pulse
-                    float alpha = MathHelper.Clamp(_exclamationTimer / _exclamationDuration, 0.0f, 1.0f);
-                    Color exclamationColor = new Color((byte)255, (byte)255, (byte)0, (byte)(255 * alpha));
+                    // Always show at full opacity when detected
+                    Color exclamationColor = Color.Yellow;
                     spriteBatch.Draw(_exclamationTexture, exclamationPos, exclamationColor);
                 }
             }
+        }
+
+        private Vector2? FindWaypointAroundObstacle(Vector2 from, Vector2 to, Func<Vector2, bool>? checkCollision)
+        {
+            // Try to find a waypoint around obstacles
+            Vector2 direction = to - from;
+            float distance = direction.Length();
+            if (distance < 1.0f) return null;
+            direction.Normalize();
+            
+            // Perpendicular directions (left and right)
+            Vector2 perpLeft = new Vector2(-direction.Y, direction.X);
+            Vector2 perpRight = new Vector2(direction.Y, -direction.X);
+            
+            // Try moving perpendicular to find a clear path
+            // Search in increasing distances
+            float[] searchDistances = { 64.0f, 96.0f, 128.0f, 160.0f };
+            
+            if (checkCollision != null)
+            {
+                foreach (float searchDist in searchDistances)
+                {
+                    // Try left side
+                    Vector2 waypointLeft = from + perpLeft * searchDist;
+                    if (!checkCollision(waypointLeft))
+                    {
+                        // Check if path from waypoint to target is mostly clear
+                        Vector2 toTarget = to - waypointLeft;
+                        float toTargetDist = toTarget.Length();
+                        if (toTargetDist < distance * 1.5f) // Waypoint should get us closer or at least not much further
+                        {
+                            return waypointLeft;
+                        }
+                    }
+                    
+                    // Try right side
+                    Vector2 waypointRight = from + perpRight * searchDist;
+                    if (!checkCollision(waypointRight))
+                    {
+                        Vector2 toTarget = to - waypointRight;
+                        float toTargetDist = toTarget.Length();
+                        if (toTargetDist < distance * 1.5f)
+                        {
+                            return waypointRight;
+                        }
+                    }
+                }
+            }
+            
+            return null; // Couldn't find a waypoint
+        }
+
+        private bool IsPathClear(Vector2 from, Vector2 to, Func<Vector2, bool>? checkCollision)
+        {
+            // Check if path is clear by sampling points along the line
+            Vector2 direction = to - from;
+            float distance = direction.Length();
+            direction.Normalize();
+            
+            if (checkCollision != null)
+            {
+                int samples = (int)(distance / 16.0f) + 1;
+                for (int i = 0; i <= samples; i++)
+                {
+                    float t = (float)i / samples;
+                    Vector2 samplePoint = from + direction * (distance * t);
+                    
+                    if (checkCollision(samplePoint))
+                    {
+                        return false; // Path is blocked
+                    }
+                }
+            }
+            
+            return true; // Path is clear
+        }
+        
+        private List<Vector2> FindPath(Vector2 start, Vector2 end, Func<Vector2, bool> checkCollision)
+        {
+            List<Vector2> path = new List<Vector2>();
+            
+            // Simple A* pathfinding on a grid
+            // Convert positions to grid coordinates
+            int startGridX = (int)(start.X / GRID_SIZE);
+            int startGridY = (int)(start.Y / GRID_SIZE);
+            int endGridX = (int)(end.X / GRID_SIZE);
+            int endGridY = (int)(end.Y / GRID_SIZE);
+            
+            // If start and end are very close, just return direct path
+            float directDistance = Vector2.Distance(start, end);
+            if (directDistance < GRID_SIZE * 2)
+            {
+                // Check if direct path is clear
+                bool pathClear = true;
+                int samples = (int)(directDistance / 16.0f) + 1;
+                for (int i = 0; i <= samples; i++)
+                {
+                    float t = (float)i / samples;
+                    Vector2 samplePoint = start + (end - start) * t;
+                    if (checkCollision(samplePoint))
+                    {
+                        pathClear = false;
+                        break;
+                    }
+                }
+                
+                if (pathClear)
+                {
+                    return new List<Vector2> { end };
+                }
+            }
+            
+            // A* pathfinding
+            var openSet = new HashSet<(int x, int y)>();
+            var closedSet = new HashSet<(int x, int y)>();
+            var cameFrom = new Dictionary<(int x, int y), (int x, int y)>();
+            var gScore = new Dictionary<(int x, int y), float>();
+            var fScore = new Dictionary<(int x, int y), float>();
+            
+            (int x, int y) startNode = (startGridX, startGridY);
+            (int x, int y) endNode = (endGridX, endGridY);
+            
+            openSet.Add(startNode);
+            gScore[startNode] = 0;
+            fScore[startNode] = Heuristic(startNode, endNode);
+            
+            // Limit search to reasonable area (max distance in pixels, then convert to grid cells)
+            float maxSearchDistance = 800.0f; // Max search distance in pixels
+            int maxSearchRadius = (int)(maxSearchDistance / GRID_SIZE);
+            
+            // Limit iterations to prevent performance issues
+            int maxIterations = 2000;
+            int iterations = 0;
+            
+            while (openSet.Count > 0 && iterations < maxIterations)
+            {
+                iterations++;
+                
+                // Find node with lowest fScore
+                (int x, int y) current = openSet.OrderBy(n => fScore.GetValueOrDefault(n, float.MaxValue)).First();
+                
+                if (current.x == endNode.x && current.y == endNode.y)
+                {
+                    // Reconstruct path
+                    path = ReconstructPath(cameFrom, current, start, end, GRID_SIZE);
+                    break;
+                }
+                
+                openSet.Remove(current);
+                closedSet.Add(current);
+                
+                // Check neighbors (8 directions)
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    for (int dy = -1; dy <= 1; dy++)
+                    {
+                        if (dx == 0 && dy == 0) continue;
+                        
+                        (int x, int y) neighbor = (current.x + dx, current.y + dy);
+                        
+                        // Skip if out of search radius
+                        if (Math.Abs(neighbor.x - startGridX) > maxSearchRadius ||
+                            Math.Abs(neighbor.y - startGridY) > maxSearchRadius)
+                            continue;
+                        
+                        if (closedSet.Contains(neighbor))
+                            continue;
+                        
+                        // Check if neighbor is walkable
+                        Vector2 neighborWorldPos = new Vector2(neighbor.x * GRID_SIZE, neighbor.y * GRID_SIZE);
+                        if (checkCollision(neighborWorldPos))
+                            continue;
+                        
+                        float tentativeGScore = gScore.GetValueOrDefault(current, float.MaxValue) + 
+                                               (dx != 0 && dy != 0 ? 1.414f : 1.0f); // Diagonal cost
+                        
+                        if (!openSet.Contains(neighbor))
+                            openSet.Add(neighbor);
+                        else if (tentativeGScore >= gScore.GetValueOrDefault(neighbor, float.MaxValue))
+                            continue;
+                        
+                        cameFrom[neighbor] = current;
+                        gScore[neighbor] = tentativeGScore;
+                        fScore[neighbor] = tentativeGScore + Heuristic(neighbor, endNode);
+                    }
+                }
+            }
+            
+            // If no path found, return empty list
+            if (path.Count == 0)
+            {
+                // Try to find at least one waypoint that gets closer
+                for (int radius = 1; radius <= 10; radius++)
+                {
+                    for (int dx = -radius; dx <= radius; dx++)
+                    {
+                        for (int dy = -radius; dy <= radius; dy++)
+                        {
+                            if (dx == 0 && dy == 0) continue;
+                            
+                            Vector2 candidate = new Vector2((startGridX + dx) * GRID_SIZE, (startGridY + dy) * GRID_SIZE);
+                            if (!checkCollision(candidate))
+                            {
+                                float distToEnd = Vector2.Distance(candidate, end);
+                                float distFromStart = Vector2.Distance(start, end);
+                                if (distToEnd < distFromStart * 1.2f)
+                                {
+                                    return new List<Vector2> { candidate };
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return path;
+        }
+        
+        private float Heuristic((int x, int y) a, (int x, int y) b)
+        {
+            // Euclidean distance for per-pixel pathfinding
+            float dx = a.x - b.x;
+            float dy = a.y - b.y;
+            return (float)Math.Sqrt(dx * dx + dy * dy);
+        }
+        
+        private List<Vector2> ReconstructPath(Dictionary<(int x, int y), (int x, int y)> cameFrom, 
+                                               (int x, int y) current, 
+                                               Vector2 start, 
+                                               Vector2 end, 
+                                               float gridSize)
+        {
+            List<Vector2> path = new List<Vector2>();
+            path.Add(end); // Add final destination
+            
+            while (cameFrom.ContainsKey(current))
+            {
+                current = cameFrom[current];
+                Vector2 worldPos = new Vector2(current.x * gridSize, current.y * gridSize);
+                path.Insert(0, worldPos);
+            }
+            
+            return path;
+        }
+        
+        private Vector2 TrySlideAlongCollision(Vector2 currentPos, Vector2 blockedPos, Vector2 direction, float moveDistance, Func<Vector2, bool>? checkCollision)
+        {
+            if (checkCollision == null) return currentPos;
+            
+            // Normalize direction if needed
+            if (direction.LengthSquared() > 0.001f)
+            {
+                direction.Normalize();
+            }
+            else
+            {
+                return currentPos; // No direction to slide
+            }
+            
+            // Define 8 isometric directions aligned with the 64x32 grid
+            // For a 64x32 diamond: halfWidth = 32, halfHeight = 16
+            // Isometric directions in screen space:
+            Vector2[] isometricDirections = new Vector2[]
+            {
+                new Vector2(0, -1),           // North (up)
+                new Vector2(0.707f, -0.354f), // Northeast (normalized from (32, -16))
+                new Vector2(1, 0),            // East (right)
+                new Vector2(0.707f, 0.354f),  // Southeast (normalized from (32, 16))
+                new Vector2(0, 1),            // South (down)
+                new Vector2(-0.707f, 0.354f), // Southwest (normalized from (-32, 16))
+                new Vector2(-1, 0),           // West (left)
+                new Vector2(-0.707f, -0.354f) // Northwest (normalized from (-32, -16))
+            };
+            
+            // Find the closest isometric direction to the current movement direction
+            int closestDir = 0;
+            float closestDot = float.MinValue;
+            for (int i = 0; i < isometricDirections.Length; i++)
+            {
+                float dot = Vector2.Dot(direction, isometricDirections[i]);
+                if (dot > closestDot)
+                {
+                    closestDot = dot;
+                    closestDir = i;
+                }
+            }
+            
+            // Get perpendicular directions in isometric space (90 degrees in isometric)
+            // For isometric, perpendicular means the adjacent directions
+            int leftDir = (closestDir + 6) % 8;  // 2 positions counter-clockwise
+            int rightDir = (closestDir + 2) % 8; // 2 positions clockwise
+            
+            // Use preferred slide direction to avoid bouncing
+            int[] directionsToTry;
+            if (_preferredSlideDirection != 0)
+            {
+                // Try preferred direction first
+                directionsToTry = _preferredSlideDirection > 0 ? new int[] { rightDir, leftDir } : new int[] { leftDir, rightDir };
+            }
+            else
+            {
+                // No preference - try both equally
+                directionsToTry = new int[] { leftDir, rightDir };
+            }
+            
+            // Try sliding along isometric directions
+            float[] slideScales = { 1.0f, 0.8f, 0.6f, 0.4f }; // Distance scaling
+            
+            Vector2 bestSlide = currentPos;
+            float bestDistance = 0.0f;
+            int bestDirIndex = -1;
+            
+            foreach (int dirIndex in directionsToTry)
+            {
+                Vector2 slideDir = isometricDirections[dirIndex];
+                
+                foreach (float scale in slideScales)
+                {
+                    Vector2 slidePos = currentPos + slideDir * (moveDistance * scale);
+                    
+                    if (!checkCollision(slidePos))
+                    {
+                        // Check how far we can slide - prefer longer slides
+                        float slideDistance = Vector2.Distance(currentPos, slidePos);
+                        if (slideDistance > bestDistance)
+                        {
+                            bestSlide = slidePos;
+                            bestDistance = slideDistance;
+                            bestDirIndex = dirIndex;
+                        }
+                    }
+                }
+            }
+            
+            // Also try blending forward direction with isometric slide directions
+            if (bestDistance < moveDistance * 0.5f)
+            {
+                foreach (int dirIndex in directionsToTry)
+                {
+                    Vector2 slideDir = isometricDirections[dirIndex];
+                    
+                    // Blend forward and perpendicular (isometric) movement
+                    foreach (float blend in new float[] { 0.5f, 0.7f, 0.3f })
+                    {
+                        Vector2 blendedDir = direction * (1.0f - blend) + slideDir * blend;
+                        blendedDir.Normalize();
+                        
+                        foreach (float scale in slideScales)
+                        {
+                            Vector2 slidePos = currentPos + blendedDir * (moveDistance * scale);
+                            
+                            if (!checkCollision(slidePos))
+                            {
+                                float slideDistance = Vector2.Distance(currentPos, slidePos);
+                                if (slideDistance > bestDistance)
+                                {
+                                    bestSlide = slidePos;
+                                    bestDistance = slideDistance;
+                                    bestDirIndex = dirIndex;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // If we found a good slide, use it
+            if (bestDistance > 0.1f)
+            {
+                // Remember preferred direction (left = -1, right = 1)
+                if (bestDirIndex == leftDir)
+                {
+                    _preferredSlideDirection = -1;
+                }
+                else if (bestDirIndex == rightDir)
+                {
+                    _preferredSlideDirection = 1;
+                }
+                return bestSlide;
+            }
+            
+            // Can't slide - reset preference and return original position
+            _preferredSlideDirection = 0;
+            return currentPos;
         }
     }
 }

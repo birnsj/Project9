@@ -5,6 +5,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Linq;
 using System.Windows.Forms;
+using System.IO;
 using Project9.Shared;
 
 namespace Project9.Editor
@@ -26,6 +27,20 @@ namespace Project9.Editor
         private bool _isDraggingPlayer;
         private PointF _dragOffset;
         private bool _showGrid64x32 = false;
+        private bool _collisionMode = false;
+        private List<CollisionCellData> _collisionCells = new List<CollisionCellData>();
+        private PointF? _collisionHoverPosition = null; // Snapped grid position for collision hover preview
+        private float _tileOpacity = 0.7f; // Default opacity for placed tiles (0.0 to 1.0)
+
+        public float TileOpacity
+        {
+            get => _tileOpacity;
+            set
+            {
+                _tileOpacity = Math.Clamp(value, 0.0f, 1.0f);
+                Invalidate();
+            }
+        }
 
         public bool ShowGrid64x32
         {
@@ -35,6 +50,30 @@ namespace Project9.Editor
                 _showGrid64x32 = value;
                 Invalidate();
             }
+        }
+
+        public bool CollisionMode
+        {
+            get => _collisionMode;
+            set
+            {
+                _collisionMode = value;
+                if (!value)
+                {
+                    // Clear collision hover when disabling collision mode
+                    _collisionHoverPosition = null;
+                }
+                Invalidate();
+            }
+        }
+
+        public List<CollisionCellData> CollisionCells => _collisionCells;
+
+        public void ClearAllCollisionCells()
+        {
+            _collisionCells.Clear();
+            SaveCollisionCells();
+            Invalidate();
         }
 
         public TerrainType SelectedTerrainType
@@ -94,10 +133,103 @@ namespace Project9.Editor
             _mapData = mapData;
             _textureLoader = textureLoader;
             
+            // Load collision cells
+            LoadCollisionCells();
+            
+            // Snap all enemies to grid
+            SnapAllEnemiesToGrid();
+            
             // Center camera on map initially
             CenterCameraOnMap();
             
             Invalidate();
+        }
+
+        private void SnapAllEnemiesToGrid()
+        {
+            foreach (var enemy in _mapData.MapData.Enemies)
+            {
+                var snappedPos = SnapToGrid(new PointF(enemy.X, enemy.Y));
+                enemy.X = snappedPos.X;
+                enemy.Y = snappedPos.Y;
+            }
+        }
+
+        private void LoadCollisionCells()
+        {
+            string collisionPath = "Content/world/collision.json";
+            string? resolvedPath = ResolveCollisionPath(collisionPath);
+            
+            if (resolvedPath != null && File.Exists(resolvedPath))
+            {
+                try
+                {
+                    string json = File.ReadAllText(resolvedPath);
+                    var collisionData = System.Text.Json.JsonSerializer.Deserialize<CollisionData>(json);
+                    if (collisionData?.Cells != null)
+                    {
+                        _collisionCells = collisionData.Cells;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[MapRenderControl] Error loading collision cells: {ex.Message}");
+                }
+            }
+        }
+
+        private static string? ResolveCollisionPath(string relativePath)
+        {
+            string currentDir = Directory.GetCurrentDirectory();
+            string fullPath = Path.GetFullPath(Path.Combine(currentDir, relativePath));
+            if (File.Exists(fullPath))
+                return fullPath;
+
+            string exeDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) ?? AppContext.BaseDirectory;
+            fullPath = Path.GetFullPath(Path.Combine(exeDir, relativePath));
+            if (File.Exists(fullPath))
+                return fullPath;
+
+            var dir = new DirectoryInfo(exeDir);
+            while (dir != null && dir.Parent != null)
+            {
+                string testPath = Path.GetFullPath(Path.Combine(dir.FullName, relativePath));
+                if (File.Exists(testPath))
+                    return testPath;
+                dir = dir.Parent;
+            }
+
+            return null;
+        }
+
+        private void SaveCollisionCells()
+        {
+            string collisionPath = "Content/world/collision.json";
+            string? resolvedPath = ResolveCollisionPath(collisionPath);
+            
+            if (resolvedPath == null)
+            {
+                // Try to create the directory if it doesn't exist
+                string dir = Path.GetDirectoryName(collisionPath) ?? "Content/world";
+                if (!Directory.Exists(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+                resolvedPath = Path.GetFullPath(collisionPath);
+            }
+
+            try
+            {
+                var collisionData = new CollisionData { Cells = _collisionCells };
+                var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+                string json = System.Text.Json.JsonSerializer.Serialize(collisionData, options);
+                File.WriteAllText(resolvedPath, json);
+                Console.WriteLine($"[MapRenderControl] Saved collision cells to {resolvedPath}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[MapRenderControl] Error saving collision cells: {ex.Message}");
+            }
         }
 
         private void CenterCameraOnMap()
@@ -167,12 +299,38 @@ namespace Project9.Editor
         {
             if (this.Focused)
             {
-                float zoomAmount = e.Delta > 0 ? 0.1f : -0.1f;
-                if (zoomAmount > 0)
-                    _camera.ZoomIn(zoomAmount);
-                else
-                    _camera.ZoomOut(Math.Abs(zoomAmount));
-                Invalidate();
+                // Get mouse position in screen coordinates
+                Point mouseScreen = e.Location;
+                
+                // Convert to world coordinates before zoom
+                PointF mouseWorldBefore = ScreenToWorld(mouseScreen);
+                
+                // Calculate zoom amount (use a percentage-based zoom for smoother feel)
+                float zoomFactor = e.Delta > 0 ? 1.1f : 1.0f / 1.1f;
+                float oldZoom = _camera.Zoom;
+                float newZoom = Math.Clamp(oldZoom * zoomFactor, 0.5f, 4.0f);
+                
+                // Only apply if zoom actually changed (within limits)
+                if (Math.Abs(newZoom - oldZoom) > 0.001f)
+                {
+                    _camera.Zoom = newZoom;
+                    
+                    // Convert mouse position to world coordinates after zoom
+                    PointF mouseWorldAfter = ScreenToWorld(mouseScreen);
+                    
+                    // Adjust camera position to keep the mouse point in the same world position
+                    PointF worldOffset = new PointF(
+                        mouseWorldBefore.X - mouseWorldAfter.X,
+                        mouseWorldBefore.Y - mouseWorldAfter.Y
+                    );
+                    
+                    _camera.Position = new PointF(
+                        _camera.Position.X + worldOffset.X * _camera.Zoom,
+                        _camera.Position.Y + worldOffset.Y * _camera.Zoom
+                    );
+                    
+                    Invalidate();
+                }
             }
         }
 
@@ -201,8 +359,37 @@ namespace Project9.Editor
                     Invalidate();
                 }
             }
+            else if (_collisionMode)
+            {
+                // Update collision hover preview position (snapped to grid)
+                PointF worldPos = ScreenToWorld(e.Location);
+                PointF snappedPos = SnapToGrid(worldPos);
+                
+                if (!_collisionHoverPosition.HasValue || 
+                    Math.Abs(_collisionHoverPosition.Value.X - snappedPos.X) > 0.1f || 
+                    Math.Abs(_collisionHoverPosition.Value.Y - snappedPos.Y) > 0.1f)
+                {
+                    _collisionHoverPosition = snappedPos;
+                    Invalidate();
+                }
+                
+                // Clear tile hover when in collision mode
+                if (_hoverTileX.HasValue || _hoverTileY.HasValue)
+                {
+                    _hoverTileX = null;
+                    _hoverTileY = null;
+                }
+            }
             else
             {
+                // Clear collision hover when not in collision mode
+                if (_collisionHoverPosition.HasValue)
+                {
+                    _collisionHoverPosition = null;
+                    Invalidate();
+                }
+                
+                // Update tile hover for normal tile editing
                 UpdateHoveredTile(e.Location);
             }
         }
@@ -222,41 +409,32 @@ namespace Project9.Editor
             // Get approximate tile first
             var (approxTileX, approxTileY) = IsometricMath.ScreenToTile(worldPos.X, worldPos.Y);
             
-            // Check nearby tiles to find which one actually contains the point
+            // Find the tile whose bottom center is closest to the cursor
+            // The bottom center of an isometric diamond is at (screenX, screenY + TileHeight)
             int? foundTileX = null;
             int? foundTileY = null;
             float minDistance = float.MaxValue;
             
             // Check tiles in a small area around the approximate position
-            for (int dx = -1; dx <= 1; dx++)
+            for (int dx = -2; dx <= 2; dx++)
             {
-                for (int dy = -1; dy <= 1; dy++)
+                for (int dy = -2; dy <= 2; dy++)
                 {
                     int testX = approxTileX + dx;
                     int testY = approxTileY + dy;
                     
                     if (testX >= 0 && testX < _mapData.Width && testY >= 0 && testY < _mapData.Height)
                     {
-                        // Get tile screen position (top-left corner)
+                        // Get tile coordinate point (grid point)
                         var (tileScreenX, tileScreenY) = IsometricMath.TileToScreen(testX, testY);
                         
-                        // Check if point is within tile bounds (diamond shape)
-                        // For isometric tiles, check if point is within the diamond
-                        float halfWidth = IsometricMath.TileWidth / 2.0f;
-                        float halfHeight = IsometricMath.TileHeight / 2.0f;
-                        float centerX = tileScreenX + halfWidth;
-                        float centerY = tileScreenY + halfHeight;
-                        
-                        // Distance from point to tile center
-                        float dx2 = worldPos.X - centerX;
-                        float dy2 = worldPos.Y - centerY;
+                        // The grid point is where we want the bottom center to align
+                        // Distance from cursor to this tile's grid point (where bottom center will be)
+                        float dx2 = worldPos.X - tileScreenX;
+                        float dy2 = worldPos.Y - tileScreenY;
                         float distance = (float)Math.Sqrt(dx2 * dx2 + dy2 * dy2);
                         
-                        // Check if point is inside diamond: |x-cx|/hw + |y-cy|/hh <= 1
-                        float normalizedX = Math.Abs(dx2) / halfWidth;
-                        float normalizedY = Math.Abs(dy2) / halfHeight;
-                        
-                        if (normalizedX + normalizedY <= 1.0f && distance < minDistance)
+                        if (distance < minDistance)
                         {
                             minDistance = distance;
                             foundTileX = testX;
@@ -294,10 +472,61 @@ namespace Project9.Editor
         private PointF SnapToGrid(PointF position)
         {
             const float gridX = 64.0f;
-            const float gridY = 32.0f;
-            float snappedX = (float)(Math.Round(position.X / gridX) * gridX);
-            float snappedY = (float)(Math.Round(position.Y / gridY) * gridY);
-            return new PointF(snappedX, snappedY);
+            const float halfHeight = 16.0f; // Half height of 64x32 diamond (32/2)
+            
+            // Grid cells per tile: 1024/64 = 16 cells
+            const int gridCellsPerTile = (int)(IsometricMath.TileWidth / gridX);
+            
+            // Find the nearest grid cell bottom corner by checking nearby positions
+            float minDistance = float.MaxValue;
+            PointF nearestCellBottomCorner = position;
+            
+            // Check nearby tiles
+            var (tileX, tileY) = IsometricMath.ScreenToTile(position.X, position.Y);
+            
+            for (int dtX = -1; dtX <= 1; dtX++)
+            {
+                for (int dtY = -1; dtY <= 1; dtY++)
+                {
+                    var (tileScreenX, tileScreenY) = IsometricMath.TileToScreen(tileX + dtX, tileY + dtY);
+                    
+                    // Check all grid cells in this tile
+                    for (int gridCellX = 0; gridCellX < gridCellsPerTile; gridCellX++)
+                    {
+                        for (int gridCellY = 0; gridCellY < gridCellsPerTile; gridCellY++)
+                        {
+                            // Calculate grid cell center position
+                            float progressX = (gridCellX + 0.5f) / gridCellsPerTile;
+                            float progressY = (gridCellY + 0.5f) / gridCellsPerTile;
+                            
+                            float cellOffsetX = (progressX - progressY) * (IsometricMath.TileWidth / 2.0f);
+                            float cellOffsetY = (progressX + progressY) * (IsometricMath.TileHeight / 2.0f);
+                            
+                            float cellCenterX = tileScreenX + cellOffsetX;
+                            float cellCenterY = tileScreenY + cellOffsetY;
+                            
+                            // Bottom corner of grid cell is at the bottom point of the diamond
+                            // Bottom point: (centerX, centerY + halfHeight)
+                            float cellBottomX = cellCenterX;
+                            float cellBottomY = cellCenterY + halfHeight;
+                            
+                            float distance = (float)Math.Sqrt(Math.Pow(position.X - cellBottomX, 2) + Math.Pow(position.Y - cellBottomY, 2));
+                            
+                            if (distance < minDistance)
+                            {
+                                minDistance = distance;
+                                nearestCellBottomCorner = new PointF(cellBottomX, cellBottomY);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Return position where entity center should be so its bottom point is at the grid cell bottom corner
+            // Entity bottom point is at (centerX, centerY + halfHeight)
+            // We want: entityCenterY + halfHeight = gridCellBottomY
+            // So: entityCenterY = gridCellBottomY - halfHeight
+            return new PointF(nearestCellBottomCorner.X, nearestCellBottomCorner.Y - halfHeight);
         }
 
         private void MapRenderControl_MouseDown(object? sender, MouseEventArgs e)
@@ -338,25 +567,65 @@ namespace Project9.Editor
                     }
                 }
                 
-                // If not dragging, treat as tile click
+                // If not dragging, handle clicks
                 if (!_isDragging)
                 {
-                    // Use the hovered tile coordinates if available (matches the preview)
-                    if (_hoverTileX.HasValue && _hoverTileY.HasValue)
+                    if (_collisionMode)
                     {
-                        _mapData.SetTile(_hoverTileX.Value, _hoverTileY.Value, _selectedTerrainType);
-                        Invalidate();
+                        // Left click: Place collision cell
+                        PointF snappedPos = SnapToGrid(worldPos);
+                        
+                        // Check if there's already a collision cell at this position
+                        var existingCell = _collisionCells.FirstOrDefault(c => 
+                            Math.Abs(c.X - snappedPos.X) < 1 && Math.Abs(c.Y - snappedPos.Y) < 1);
+                        
+                        if (existingCell == null)
+                        {
+                            // Add collision cell
+                            _collisionCells.Add(new CollisionCellData { X = snappedPos.X, Y = snappedPos.Y });
+                            SaveCollisionCells();
+                            Invalidate();
+                        }
                     }
                     else
                     {
-                        // Fallback: calculate from mouse position
-                        var (tileX, tileY) = IsometricMath.ScreenToTile(worldPos.X, worldPos.Y);
-                        
-                        if (tileX >= 0 && tileX < _mapData.Width && tileY >= 0 && tileY < _mapData.Height)
+                        // Use the hovered tile coordinates if available (matches the preview)
+                        if (_hoverTileX.HasValue && _hoverTileY.HasValue)
                         {
-                            _mapData.SetTile(tileX, tileY, _selectedTerrainType);
+                            _mapData.SetTile(_hoverTileX.Value, _hoverTileY.Value, _selectedTerrainType);
                             Invalidate();
                         }
+                        else
+                        {
+                            // Fallback: calculate from mouse position
+                            var (tileX, tileY) = IsometricMath.ScreenToTile(worldPos.X, worldPos.Y);
+                            
+                            if (tileX >= 0 && tileX < _mapData.Width && tileY >= 0 && tileY < _mapData.Height)
+                            {
+                                _mapData.SetTile(tileX, tileY, _selectedTerrainType);
+                                Invalidate();
+                            }
+                        }
+                    }
+                }
+            }
+            else if (e.Button == MouseButtons.Right)
+            {
+                // Right click: Delete collision cell (only in collision mode)
+                if (_collisionMode)
+                {
+                    PointF worldPos = ScreenToWorld(e.Location);
+                    PointF snappedPos = SnapToGrid(worldPos);
+                    
+                    // Find and remove collision cell at this position
+                    var existingCell = _collisionCells.FirstOrDefault(c => 
+                        Math.Abs(c.X - snappedPos.X) < 1 && Math.Abs(c.Y - snappedPos.Y) < 1);
+                    
+                    if (existingCell != null)
+                    {
+                        _collisionCells.Remove(existingCell);
+                        SaveCollisionCells();
+                        Invalidate();
                     }
                 }
             }
@@ -402,12 +671,62 @@ namespace Project9.Editor
                     });
                     imageAttributes.SetColorMatrix(colorMatrix);
                     
-                    g.DrawImage(
-                        texture,
-                        new Rectangle((int)screenX, (int)screenY, IsometricMath.TileWidth, IsometricMath.TileHeight),
-                        0, 0, texture.Width, texture.Height,
-                        System.Drawing.GraphicsUnit.Pixel,
-                        imageAttributes);
+                    // All tiles place at grid corner point
+                    // screenX, screenY is the grid corner (top of isometric diamond)
+                    // Draw tiles at their natural position - top of diamond at grid corner
+                    
+                    if (_selectedTerrainType == TerrainType.Test)
+                    {
+                        // Test tiles: 1024x1024, but bottom 1024x512 is the diamond, top 512 is overdraw
+                        // Grid corner (screenX, screenY) should align with bottom of diamond
+                        // TileToScreen returns the top point, which is centered horizontally
+                        // Offset upward by TileHeight + overdraw to align bottom diamond with grid corner
+                        float overdrawHeight = texture.Height - IsometricMath.TileHeight; // 512 for Test tile
+                        float totalOffset = IsometricMath.TileHeight + overdrawHeight; // 512 + 512 = 1024
+                        
+                        // Center horizontally: TileToScreen returns center, so offset by half width
+                        float drawX = screenX - (texture.Width / 2.0f);
+                        float drawY = screenY - totalOffset; // Move up to align bottom diamond
+                        
+                        // Round to nearest pixel for perfect alignment
+                        int finalDrawX = (int)Math.Round(drawX);
+                        int finalDrawY = (int)Math.Round(drawY);
+                        
+                        g.DrawImage(
+                            texture,
+                            new Rectangle(finalDrawX, finalDrawY, texture.Width, texture.Height),
+                            0, 0, texture.Width, texture.Height,
+                            System.Drawing.GraphicsUnit.Pixel,
+                            imageAttributes);
+                    }
+                    else
+                    {
+                        // Regular tiles: align bottom of diamond with grid corner
+                        // Grid corner (screenX, screenY) should align with bottom of diamond
+                        // TileToScreen returns the top point, which is centered horizontally
+                        // For 1024-wide texture, offset by -512 to get left edge
+                        // For standard 1024x512 tiles: offset upward by TileHeight to align bottom
+                        // For tiles with overdraw (taller than TileHeight), offset by overdraw amount
+                        float overdrawHeight = texture.Height > IsometricMath.TileHeight 
+                            ? (texture.Height - IsometricMath.TileHeight) 
+                            : 0;
+                        float totalOffset = IsometricMath.TileHeight + overdrawHeight;
+                        
+                        // Center horizontally: TileToScreen returns center, so offset by half width
+                        float drawX = screenX - (texture.Width / 2.0f);
+                        float drawY = screenY - totalOffset; // Move up to align bottom
+                        
+                        // Round to nearest pixel for perfect alignment
+                        int finalDrawX = (int)Math.Round(drawX);
+                        int finalDrawY = (int)Math.Round(drawY);
+                        
+                        g.DrawImage(
+                            texture,
+                            new Rectangle(finalDrawX, finalDrawY, texture.Width, texture.Height),
+                            0, 0, texture.Width, texture.Height,
+                            System.Drawing.GraphicsUnit.Pixel,
+                            imageAttributes);
+                    }
                 }
             }
         }
@@ -430,7 +749,7 @@ namespace Project9.Editor
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.None;
             g.InterpolationMode = InterpolationMode.NearestNeighbor;
-            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.PixelOffsetMode = PixelOffsetMode.None; // Changed to None for pixel-perfect alignment
 
             // Apply camera transform
             Matrix originalTransform = g.Transform;
@@ -469,26 +788,94 @@ namespace Project9.Editor
                 
                 if (texture != null)
                 {
-                    g.DrawImage(texture, screenX, screenY, IsometricMath.TileWidth, IsometricMath.TileHeight);
+                    // All tiles place at grid corner point
+                    // screenX, screenY is the grid corner (top of isometric diamond)
+                    // Draw tiles at their natural position - top of diamond at grid corner
+                    
+                    if (tile.type == TerrainType.Test)
+                    {
+                        using (System.Drawing.Imaging.ImageAttributes imageAttributes = new System.Drawing.Imaging.ImageAttributes())
+                        {
+                            System.Drawing.Imaging.ColorMatrix colorMatrix = new System.Drawing.Imaging.ColorMatrix(new float[][]
+                            {
+                                new float[] {1, 0, 0, 0, 0},
+                                new float[] {0, 1, 0, 0, 0},
+                                new float[] {0, 0, 1, 0, 0},
+                                new float[] {0, 0, 0, _tileOpacity, 0}, // Use configurable opacity
+                                new float[] {0, 0, 0, 0, 1}
+                            });
+                            imageAttributes.SetColorMatrix(colorMatrix);
+                            
+                            // Test tiles: 1024x1024, but bottom 1024x512 is the diamond, top 512 is overdraw
+                            // Grid corner (screenX, screenY) should align with bottom of diamond
+                            // TileToScreen returns the top point, which is centered horizontally
+                            // Offset upward by TileHeight + overdraw to align bottom diamond with grid corner
+                            float overdrawHeight = texture.Height - IsometricMath.TileHeight; // 512 for Test tile
+                            float totalOffset = IsometricMath.TileHeight + overdrawHeight; // 512 + 512 = 1024
+                            
+                            // Center horizontally: TileToScreen returns center, so offset by half width
+                            float drawX = screenX - (texture.Width / 2.0f);
+                            float drawY = screenY - totalOffset; // Move up to align bottom diamond
+                            
+                            // Round to nearest pixel for perfect alignment
+                            int finalDrawX = (int)Math.Round(drawX);
+                            int finalDrawY = (int)Math.Round(drawY);
+                            
+                            g.DrawImage(
+                                texture,
+                                new Rectangle(finalDrawX, finalDrawY, texture.Width, texture.Height),
+                                0, 0, texture.Width, texture.Height,
+                                System.Drawing.GraphicsUnit.Pixel,
+                                imageAttributes);
+                        }
+                    }
+                    else
+                    {
+                        // Regular tiles: align bottom of diamond with grid corner
+                        // Grid corner (screenX, screenY) should align with bottom of diamond
+                        // TileToScreen returns the top point, which is centered horizontally
+                        // For 1024-wide texture, offset by -512 to get left edge
+                        // For standard 1024x512 tiles: offset upward by TileHeight to align bottom
+                        // For tiles with overdraw (taller than TileHeight), add overdraw offset
+                        float overdrawHeight = texture.Height > IsometricMath.TileHeight 
+                            ? (texture.Height - IsometricMath.TileHeight) 
+                            : 0;
+                        float totalOffset = IsometricMath.TileHeight + overdrawHeight;
+                        
+                        // Center horizontally: TileToScreen returns center, so offset by half width
+                        float drawX = screenX - (texture.Width / 2.0f);
+                        float drawY = screenY - totalOffset; // Move up to align bottom
+                        
+                        // Round to nearest pixel for perfect alignment
+                        int finalDrawX = (int)Math.Round(drawX);
+                        int finalDrawY = (int)Math.Round(drawY);
+                        g.DrawImage(texture, finalDrawX, finalDrawY, texture.Width, texture.Height);
+                    }
                 }
             }
 
-            // Draw hover preview
-            if (_hoverTileX.HasValue && _hoverTileY.HasValue && !_isDragging)
+            // Draw hover preview (only if not in collision mode)
+            if (!_collisionMode && _hoverTileX.HasValue && _hoverTileY.HasValue && !_isDragging)
             {
                 DrawHoverPreview(g);
             }
 
             // Draw enemies
-            foreach (var enemy in _mapData.MapData.Enemies)
+            for (int i = 0; i < _mapData.MapData.Enemies.Count; i++)
             {
-                DrawEnemy(g, enemy, enemy == _draggedEnemy);
+                var enemy = _mapData.MapData.Enemies[i];
+                DrawEnemy(g, enemy, enemy == _draggedEnemy, i);
             }
 
             // Draw player
             if (_mapData.MapData.Player != null)
             {
                 DrawPlayer(g, _mapData.MapData.Player, _isDraggingPlayer);
+            }
+            else
+            {
+                // Debug: log if player is null
+                Console.WriteLine("[MapRenderControl] Player is null, not drawing");
             }
 
             // Draw 64x32 grid if enabled
@@ -497,8 +884,98 @@ namespace Project9.Editor
                 DrawGrid64x32(g);
             }
 
+            // Draw collision cells
+            DrawCollisionCells(g);
+            
+            // Draw collision hover preview (64x32 diamond cursor)
+            if (_collisionMode && _collisionHoverPosition.HasValue && !_isDragging)
+            {
+                DrawCollisionHoverPreview(g, _collisionHoverPosition.Value);
+            }
+
             // Restore original transform
             g.Transform = originalTransform;
+        }
+
+        private void DrawCollisionCells(Graphics g)
+        {
+            const float halfWidth = 32.0f;  // 64/2 = 32
+            const float halfHeight = 16.0f; // 32/2 = 16
+
+            foreach (var cell in _collisionCells)
+            {
+                float centerX = cell.X;
+                float centerY = cell.Y;
+
+                // Define the 4 points of the isometric diamond (64x32 size)
+                PointF[] diamondPoints = new PointF[]
+                {
+                    new PointF(centerX, centerY - halfHeight),                    // Top
+                    new PointF(centerX + halfWidth, centerY),                     // Right
+                    new PointF(centerX, centerY + halfHeight),                    // Bottom
+                    new PointF(centerX - halfWidth, centerY)                      // Left
+                };
+
+                // Draw filled isometric diamond in purple
+                using (SolidBrush brush = new SolidBrush(Color.FromArgb(180, 128, 0, 128))) // Purple with transparency
+                {
+                    g.FillPolygon(brush, diamondPoints);
+                }
+
+                // Draw outline
+                using (Pen pen = new Pen(Color.Purple, 2))
+                {
+                    g.DrawPolygon(pen, diamondPoints);
+                }
+            }
+        }
+
+        private void DrawCollisionHoverPreview(Graphics g, PointF position)
+        {
+            const float halfWidth = 32.0f;  // 64/2 = 32
+            const float halfHeight = 16.0f; // 32/2 = 16
+
+            float centerX = position.X;
+            float centerY = position.Y;
+
+            // Define the 4 points of the isometric diamond (64x32 size)
+            PointF[] diamondPoints = new PointF[]
+            {
+                new PointF(centerX, centerY - halfHeight),                    // Top
+                new PointF(centerX + halfWidth, centerY),                     // Right
+                new PointF(centerX, centerY + halfHeight),                    // Bottom
+                new PointF(centerX - halfWidth, centerY)                      // Left
+            };
+
+            // Check if there's already a collision cell at this position
+            bool cellExists = _collisionCells.Any(c => 
+                Math.Abs(c.X - centerX) < 1 && Math.Abs(c.Y - centerY) < 1);
+
+            // Draw filled isometric diamond preview (lighter/more transparent for hover)
+            if (cellExists)
+            {
+                // Red tint if cell already exists (will be deleted on click)
+                using (SolidBrush brush = new SolidBrush(Color.FromArgb(150, 255, 100, 100))) // Light red with transparency
+                {
+                    g.FillPolygon(brush, diamondPoints);
+                }
+                using (Pen pen = new Pen(Color.Red, 2))
+                {
+                    g.DrawPolygon(pen, diamondPoints);
+                }
+            }
+            else
+            {
+                // Light purple for placement preview
+                using (SolidBrush brush = new SolidBrush(Color.FromArgb(150, 200, 100, 200))) // Light purple with transparency
+                {
+                    g.FillPolygon(brush, diamondPoints);
+                }
+                using (Pen pen = new Pen(Color.Purple, 2))
+                {
+                    g.DrawPolygon(pen, diamondPoints);
+                }
+            }
         }
 
         private void DrawGrid64x32(Graphics g)
@@ -592,7 +1069,7 @@ namespace Project9.Editor
             }
         }
 
-        private void DrawEnemy(Graphics g, EnemyData enemy, bool isDragging)
+        private void DrawEnemy(Graphics g, EnemyData enemy, bool isDragging, int index)
         {
             float centerX = enemy.X;
             float centerY = enemy.Y;
@@ -621,6 +1098,31 @@ namespace Project9.Editor
             {
                 g.DrawPolygon(pen, diamondPoints);
             }
+            
+            // Draw label above the enemy
+            string label = $"Enemy {index}";
+            using (Font font = new Font("Arial", 10, FontStyle.Bold))
+            using (SolidBrush textBrush = new SolidBrush(Color.White))
+            using (SolidBrush backgroundBrush = new SolidBrush(Color.FromArgb(200, Color.Black)))
+            {
+                SizeF textSize = g.MeasureString(label, font);
+                
+                // Position label above the enemy (at the top of the diamond)
+                float labelX = centerX - textSize.Width / 2.0f;
+                float labelY = centerY - halfHeight - textSize.Height - 4; // 4 pixels above the diamond
+                
+                // Draw background rectangle for better visibility
+                RectangleF backgroundRect = new RectangleF(
+                    labelX - 2,
+                    labelY - 1,
+                    textSize.Width + 4,
+                    textSize.Height + 2
+                );
+                g.FillRectangle(backgroundBrush, backgroundRect);
+                
+                // Draw text
+                g.DrawString(label, font, textBrush, labelX, labelY);
+            }
         }
 
         private void DrawPlayer(Graphics g, PlayerData player, bool isDragging)
@@ -628,9 +1130,9 @@ namespace Project9.Editor
             float centerX = player.X;
             float centerY = player.Y;
             
-            // Isometric diamond dimensions (slightly larger than enemy)
-            float halfWidth = 40.0f;  // Half width of the isometric box
-            float halfHeight = 20.0f; // Half height of the isometric box
+            // Isometric diamond dimensions (64x32, same as enemies)
+            float halfWidth = 32.0f;  // Half width of the isometric box (64/2)
+            float halfHeight = 16.0f; // Half height of the isometric box (32/2)
             
             // Define the 4 points of the isometric diamond
             PointF[] diamondPoints = new PointF[]
@@ -651,6 +1153,31 @@ namespace Project9.Editor
             using (Pen pen = new Pen(Color.White, 2))
             {
                 g.DrawPolygon(pen, diamondPoints);
+            }
+            
+            // Draw label above the player
+            string label = "Player";
+            using (Font font = new Font("Arial", 10, FontStyle.Bold))
+            using (SolidBrush textBrush = new SolidBrush(Color.White))
+            using (SolidBrush backgroundBrush = new SolidBrush(Color.FromArgb(200, Color.Black)))
+            {
+                SizeF textSize = g.MeasureString(label, font);
+                
+                // Position label above the player (at the top of the diamond)
+                float labelX = centerX - textSize.Width / 2.0f;
+                float labelY = centerY - halfHeight - textSize.Height - 4; // 4 pixels above the diamond
+                
+                // Draw background rectangle for better visibility
+                RectangleF backgroundRect = new RectangleF(
+                    labelX - 2,
+                    labelY - 1,
+                    textSize.Width + 4,
+                    textSize.Height + 2
+                );
+                g.FillRectangle(backgroundBrush, backgroundRect);
+                
+                // Draw text
+                g.DrawString(label, font, textBrush, labelX, labelY);
             }
         }
 

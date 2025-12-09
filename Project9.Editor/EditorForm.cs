@@ -18,6 +18,9 @@ namespace Project9.Editor
         private EditorMapData _mapData = null!;
         private TileTextureLoader _textureLoader = null!;
         private System.Windows.Forms.Timer _statusUpdateTimer = null!;
+        private bool _collisionMode = false;
+        private ToolStripButton? _collisionButton = null!;
+        private TrackBar? _opacitySlider = null;
 
         public EditorForm()
         {
@@ -69,15 +72,31 @@ namespace Project9.Editor
             ToolStripLabel label = new ToolStripLabel("Tile Type:");
             _toolStrip.Items.Add(label);
 
-            // Add buttons for each terrain type
+            // Add buttons for each terrain type (except Test, which gets its own button)
             foreach (TerrainType terrainType in Enum.GetValues<TerrainType>())
             {
+                if (terrainType == TerrainType.Test)
+                    continue; // Skip Test, add it separately below
+                    
                 ToolStripButton button = new ToolStripButton(terrainType.ToString());
                 button.Tag = terrainType;
                 button.Click += TileTypeButton_Click;
                 button.DisplayStyle = ToolStripItemDisplayStyle.Text;
                 _toolStrip.Items.Add(button);
             }
+
+            // Add separator
+            _toolStrip.Items.Add(new ToolStripSeparator());
+
+            // Add dedicated Test Tile button (prominent)
+            ToolStripButton testTileButton = new ToolStripButton("Test Tile")
+            {
+                Tag = TerrainType.Test,
+                DisplayStyle = ToolStripItemDisplayStyle.Text,
+                BackColor = Color.LightGreen // Make it stand out
+            };
+            testTileButton.Click += TileTypeButton_Click;
+            _toolStrip.Items.Add(testTileButton);
 
             // Add separator
             _toolStrip.Items.Add(new ToolStripSeparator());
@@ -92,10 +111,61 @@ namespace Project9.Editor
             ((CheckBox)gridCheckBoxHost.Control).CheckedChanged += ShowGridCheckBox_CheckedChanged;
             _toolStrip.Items.Add(gridCheckBoxHost);
 
+            // Add separator
+            _toolStrip.Items.Add(new ToolStripSeparator());
+
+            // Add opacity slider
+            ToolStripLabel opacityLabel = new ToolStripLabel("Tile Opacity:");
+            _toolStrip.Items.Add(opacityLabel);
+
+            _opacitySlider = new TrackBar
+            {
+                Minimum = 0,
+                Maximum = 100,
+                Value = 70, // Default to 70% (0.7f)
+                Width = 150,
+                TickFrequency = 10,
+                AutoSize = false
+            };
+            ToolStripControlHost opacitySliderHost = new ToolStripControlHost(_opacitySlider);
+            _opacitySlider.ValueChanged += (sender, e) =>
+            {
+                if (_mapRenderControl != null)
+                {
+                    _mapRenderControl.TileOpacity = _opacitySlider.Value / 100.0f;
+                }
+            };
+            _toolStrip.Items.Add(opacitySliderHost);
+
+            // Add separator
+            _toolStrip.Items.Add(new ToolStripSeparator());
+
+            // Add collision mode button (toggle button)
+            _collisionButton = new ToolStripButton("Collision Mode")
+            {
+                DisplayStyle = ToolStripItemDisplayStyle.Text,
+                CheckOnClick = true // Make it a toggle button
+            };
+            _collisionButton.Click += CollisionButton_Click;
+            _toolStrip.Items.Add(_collisionButton);
+
+            // Add delete all collision button
+            var deleteAllCollisionButton = new ToolStripButton("Delete All Collision")
+            {
+                DisplayStyle = ToolStripItemDisplayStyle.Text
+            };
+            deleteAllCollisionButton.Click += DeleteAllCollisionButton_Click;
+            _toolStrip.Items.Add(deleteAllCollisionButton);
+
             // Map Render Control
             _mapRenderControl = new MapRenderControl();
             _mapRenderControl.Dock = DockStyle.Fill;
             _mapRenderControl.SelectedTerrainType = TerrainType.Grass;
+            // Set initial opacity to match slider
+            if (_opacitySlider != null)
+            {
+                _mapRenderControl.TileOpacity = _opacitySlider.Value / 100.0f;
+            }
 
             // Status Strip
             _statusStrip = new StatusStrip();
@@ -198,6 +268,7 @@ namespace Project9.Editor
             try
             {
                 await _mapData.SaveAsync();
+                // Collision cells are saved automatically when placed/removed
                 MessageBox.Show("Map saved successfully.", "Save Map", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
@@ -239,6 +310,39 @@ namespace Project9.Editor
             if (_mapRenderControl != null && sender is CheckBox checkBox)
             {
                 _mapRenderControl.ShowGrid64x32 = checkBox.Checked;
+            }
+        }
+
+        private void CollisionButton_Click(object? sender, EventArgs e)
+        {
+            // The button's Checked state determines collision mode
+            _collisionMode = _collisionButton?.Checked ?? false;
+            if (_collisionButton != null)
+            {
+                _collisionButton.BackColor = _collisionMode ? Color.LightBlue : Color.Transparent;
+            }
+            if (_mapRenderControl != null)
+            {
+                _mapRenderControl.CollisionMode = _collisionMode;
+            }
+        }
+
+        private void DeleteAllCollisionButton_Click(object? sender, EventArgs e)
+        {
+            // Confirm deletion
+            DialogResult result = MessageBox.Show(
+                "Are you sure you want to delete all collision cells? This action cannot be undone.",
+                "Delete All Collision Cells",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+
+            if (result == DialogResult.Yes)
+            {
+                if (_mapRenderControl != null)
+                {
+                    _mapRenderControl.ClearAllCollisionCells();
+                    MessageBox.Show("All collision cells have been deleted.", "Delete All Collision", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
             }
         }
 

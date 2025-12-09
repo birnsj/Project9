@@ -845,17 +845,17 @@
     {
       "x": 8,
       "y": 8,
-      "terrainType": "Sand"
+      "terrainType": "Test"
     },
     {
       "x": 8,
       "y": 9,
-      "terrainType": "Sand"
+      "terrainType": "Test"
     },
     {
       "x": 8,
       "y": 10,
-      "terrainType": "Sand"
+      "terrainType": "Test"
     },
     {
       "x": 8,
@@ -945,17 +945,17 @@
     {
       "x": 9,
       "y": 8,
-      "terrainType": "Sand"
+      "terrainType": "Test"
     },
     {
       "x": 9,
       "y": 9,
-      "terrainType": "Sand"
+      "terrainType": "Test"
     },
     {
       "x": 9,
       "y": 10,
-      "terrainType": "Sand"
+      "terrainType": "Grass"
     },
     {
       "x": 9,
@@ -1045,17 +1045,17 @@
     {
       "x": 10,
       "y": 8,
-      "terrainType": "Dirt"
+      "terrainType": "Test"
     },
     {
       "x": 10,
       "y": 9,
-      "terrainType": "Sand"
+      "terrainType": "Grass"
     },
     {
       "x": 10,
       "y": 10,
-      "terrainType": "Sand"
+      "terrainType": "Grass"
     },
     {
       "x": 10,
@@ -2005,24 +2005,28 @@
   ],
   "enemies": [
     {
-      "x": 9,
-      "y": 9
+      "x": -416,
+      "y": 4512
     },
     {
-      "x": 10,
-      "y": 9
+      "x": 512,
+      "y": 4720
     },
     {
-      "x": 11,
-      "y": 9
+      "x": 1024,
+      "y": 4976
     },
     {
-      "x": 9,
-      "y": 10
+      "x": -512,
+      "y": 4720
     },
     {
-      "x": 10,
-      "y": 10
+      "x": 0,
+      "y": 4976
     }
-  ]
+  ],
+  "player": {
+    "x": 0,
+    "y": 4368
+  }
 }

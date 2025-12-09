@@ -92,6 +92,14 @@ namespace Project9.Editor
                 _mapData.Player.X = screenX;
                 _mapData.Player.Y = screenY;
             }
+            else if (_mapData.Player == null)
+            {
+                // Create player at center of map if missing
+                float centerTileX = (_mapData.Width - 1) / 2.0f;
+                float centerTileY = (_mapData.Height - 1) / 2.0f;
+                var (screenX, screenY) = IsometricMath.TileToScreen((int)centerTileX, (int)centerTileY);
+                _mapData.Player = new PlayerData { X = screenX, Y = screenY };
+            }
             
             // Migrate enemies
             foreach (var enemy in _mapData.Enemies)
@@ -108,6 +116,16 @@ namespace Project9.Editor
         private void CreateDefaultMap()
         {
             _mapData = MapData.CreateDefault(20, 20);
+            
+            // Ensure player exists if not present
+            if (_mapData.Player == null)
+            {
+                // Place player at center of map
+                float centerTileX = (_mapData.Width - 1) / 2.0f;
+                float centerTileY = (_mapData.Height - 1) / 2.0f;
+                var (screenX, screenY) = IsometricMath.TileToScreen((int)centerTileX, (int)centerTileY);
+                _mapData.Player = new PlayerData { X = screenX, Y = screenY };
+            }
         }
 
         private static string? ResolveMapPath(string relativePath)

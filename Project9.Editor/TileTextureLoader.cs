@@ -19,7 +19,17 @@ namespace Project9.Editor
         {
             foreach (TerrainType terrainType in Enum.GetValues<TerrainType>())
             {
-                string texturePath = $"Content/sprites/tiles/template/{terrainType}.png";
+                string texturePath;
+                // Test tile is in the test folder, others are in template folder
+                if (terrainType == TerrainType.Test)
+                {
+                    texturePath = $"Content/sprites/tiles/test/{terrainType}.png";
+                }
+                else
+                {
+                    texturePath = $"Content/sprites/tiles/template/{terrainType}.png";
+                }
+                
                 string? resolvedPath = ResolveTexturePath(texturePath);
                 
                 if (resolvedPath != null && File.Exists(resolvedPath))
