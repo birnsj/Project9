@@ -1,5 +1,6 @@
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using System;
 
 namespace Project9
 {
@@ -18,6 +19,7 @@ namespace Project9
         private Color _sneakColor;
         private int _size;
         private bool _isSneaking;
+        private Texture2D? _diamondTexture;
         private float _flashDuration;
         private float _flashTimer;
         private float _flashInterval;
@@ -207,13 +209,51 @@ namespace Project9
             }
         }
 
+        private void CreateDiamondTexture(GraphicsDevice graphicsDevice)
+        {
+            int halfWidth = 40;
+            int halfHeight = 20;
+            int width = halfWidth * 2;
+            int height = halfHeight * 2;
+            
+            _diamondTexture = new Texture2D(graphicsDevice, width, height);
+            Color[] colorData = new Color[width * height];
+            
+            Vector2 center = new Vector2(halfWidth, halfHeight);
+            
+            for (int x = 0; x < width; x++)
+            {
+                for (int y = 0; y < height; y++)
+                {
+                    Vector2 pos = new Vector2(x, y);
+                    
+                    // Check if point is inside the diamond shape
+                    // Diamond formula: |x - cx|/hw + |y - cy|/hh <= 1
+                    float dx = Math.Abs(x - center.X);
+                    float dy = Math.Abs(y - center.Y);
+                    float normalizedX = dx / halfWidth;
+                    float normalizedY = dy / halfHeight;
+                    
+                    if (normalizedX + normalizedY <= 1.0f)
+                    {
+                        colorData[y * width + x] = Color.White; // Will be tinted when drawing
+                    }
+                    else
+                    {
+                        colorData[y * width + x] = Color.Transparent;
+                    }
+                }
+            }
+            
+            _diamondTexture.SetData(colorData);
+        }
+
         public void Draw(SpriteBatch spriteBatch)
         {
-            if (_texture == null)
+            // Create diamond texture if needed
+            if (_diamondTexture == null)
             {
-                // Create a simple colored rectangle texture if not loaded
-                _texture = new Texture2D(spriteBatch.GraphicsDevice, 1, 1);
-                _texture.SetData(new[] { _color });
+                CreateDiamondTexture(spriteBatch.GraphicsDevice);
             }
 
             // Flash effect: alternate visibility when hit
@@ -227,10 +267,11 @@ namespace Project9
 
             if (visible)
             {
-                // Draw player centered at position
-                Vector2 drawPosition = _position - new Vector2(_size / 2.0f, _size / 2.0f);
+                // Draw isometric diamond centered at position
+                // Diamond is 80x40 (halfWidth=40, halfHeight=20)
+                Vector2 drawPosition = _position - new Vector2(40, 20);
                 Color drawColor = _isSneaking ? _sneakColor : _normalColor;
-                spriteBatch.Draw(_texture, new Rectangle((int)drawPosition.X, (int)drawPosition.Y, _size, _size), drawColor);
+                spriteBatch.Draw(_diamondTexture, drawPosition, drawColor);
             }
         }
     }

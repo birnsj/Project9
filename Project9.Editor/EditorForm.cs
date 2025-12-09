@@ -79,6 +79,19 @@ namespace Project9.Editor
                 _toolStrip.Items.Add(button);
             }
 
+            // Add separator
+            _toolStrip.Items.Add(new ToolStripSeparator());
+
+            // Add checkbox for 64x32 grid
+            ToolStripControlHost gridCheckBoxHost = new ToolStripControlHost(new CheckBox
+            {
+                Text = "Show 64x32 Grid",
+                AutoSize = true,
+                Checked = false
+            });
+            ((CheckBox)gridCheckBoxHost.Control).CheckedChanged += ShowGridCheckBox_CheckedChanged;
+            _toolStrip.Items.Add(gridCheckBoxHost);
+
             // Map Render Control
             _mapRenderControl = new MapRenderControl();
             _mapRenderControl.Dock = DockStyle.Fill;
@@ -219,6 +232,14 @@ namespace Project9.Editor
         private void AboutMenu_Click(object? sender, EventArgs e)
         {
             MessageBox.Show("Project 9 V001", "About", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void ShowGridCheckBox_CheckedChanged(object? sender, EventArgs e)
+        {
+            if (_mapRenderControl != null && sender is CheckBox checkBox)
+            {
+                _mapRenderControl.ShowGrid64x32 = checkBox.Checked;
+            }
         }
 
         protected override void Dispose(bool disposing)

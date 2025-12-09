@@ -25,6 +25,17 @@ namespace Project9.Editor
         private EnemyData? _draggedEnemy;
         private bool _isDraggingPlayer;
         private PointF _dragOffset;
+        private bool _showGrid64x32 = false;
+
+        public bool ShowGrid64x32
+        {
+            get => _showGrid64x32;
+            set
+            {
+                _showGrid64x32 = value;
+                Invalidate();
+            }
+        }
 
         public TerrainType SelectedTerrainType
         {
@@ -480,47 +491,166 @@ namespace Project9.Editor
                 DrawPlayer(g, _mapData.MapData.Player, _isDraggingPlayer);
             }
 
+            // Draw 64x32 grid if enabled
+            if (_showGrid64x32)
+            {
+                DrawGrid64x32(g);
+            }
+
             // Restore original transform
             g.Transform = originalTransform;
         }
 
+        private void DrawGrid64x32(Graphics g)
+        {
+            const float gridX = 64.0f;
+            
+            // Use a darker, less intense color (semi-transparent dark gray)
+            using (Pen gridPen = new Pen(Color.FromArgb(100, 80, 80, 80), 1))
+            {
+                // Calculate visible area in world coordinates (already transformed by camera)
+                PointF topLeft = ScreenToWorld(new Point(0, 0));
+                PointF bottomRight = ScreenToWorld(new Point(this.Width, this.Height));
+                
+                // Expand bounds to ensure we draw enough grid lines
+                float minX = topLeft.X - IsometricMath.TileWidth * 2;
+                float maxX = bottomRight.X + IsometricMath.TileWidth * 2;
+                float minY = topLeft.Y - IsometricMath.TileHeight * 2;
+                float maxY = bottomRight.Y + IsometricMath.TileHeight * 2;
+                
+                // Convert visible area to tile coordinates to find which tiles are visible
+                var (minTileX, minTileY) = IsometricMath.ScreenToTile(minX, minY);
+                var (maxTileX, maxTileY) = IsometricMath.ScreenToTile(maxX, maxY);
+                
+                // Expand tile range
+                minTileX -= 3;
+                minTileY -= 3;
+                maxTileX += 3;
+                maxTileY += 3;
+                
+                // Grid cells per tile: 1024/64 = 16 cells horizontally, 512/32 = 16 cells vertically
+                const int gridCellsPerTile = (int)(IsometricMath.TileWidth / gridX);
+                
+                // Draw lines parallel to tile edges (isometric lines)
+                // Lines going northeast-southwest (parallel to tile top/bottom edges)
+                for (int tileX = minTileX; tileX <= maxTileX; tileX++)
+                {
+                    for (int gridCell = 0; gridCell < gridCellsPerTile; gridCell++)
+                    {
+                        // Calculate offset within the tile
+                        float cellProgress = gridCell / (float)gridCellsPerTile;
+                        float offsetX = cellProgress * (IsometricMath.TileWidth / 2.0f);
+                        float offsetY = cellProgress * (IsometricMath.TileHeight / 2.0f);
+                        
+                        // Draw line from bottom to top of visible area
+                        // Start from bottom of visible tiles
+                        var (startX, startY) = IsometricMath.TileToScreen(tileX, minTileY);
+                        startX += offsetX;
+                        startY += offsetY;
+                        
+                        // End at top of visible tiles
+                        var (endX, endY) = IsometricMath.TileToScreen(tileX, maxTileY);
+                        endX += offsetX;
+                        endY += offsetY;
+                        
+                        // Clip to visible bounds
+                        if ((startY >= minY && startY <= maxY) || (endY >= minY && endY <= maxY) ||
+                            (startY < minY && endY > maxY) || (startY > maxY && endY < minY))
+                        {
+                            g.DrawLine(gridPen, startX, startY, endX, endY);
+                        }
+                    }
+                }
+                
+                // Lines going northwest-southeast (parallel to tile left/right edges)
+                for (int tileY = minTileY; tileY <= maxTileY; tileY++)
+                {
+                    for (int gridCell = 0; gridCell < gridCellsPerTile; gridCell++)
+                    {
+                        // Calculate offset within the tile (negative X, positive Y)
+                        float cellProgress = gridCell / (float)gridCellsPerTile;
+                        float offsetX = -cellProgress * (IsometricMath.TileWidth / 2.0f);
+                        float offsetY = cellProgress * (IsometricMath.TileHeight / 2.0f);
+                        
+                        // Draw line from left to right of visible area
+                        var (startX, startY) = IsometricMath.TileToScreen(minTileX, tileY);
+                        startX += offsetX;
+                        startY += offsetY;
+                        
+                        var (endX, endY) = IsometricMath.TileToScreen(maxTileX, tileY);
+                        endX += offsetX;
+                        endY += offsetY;
+                        
+                        // Clip to visible bounds
+                        if ((startX >= minX && startX <= maxX) || (endX >= minX && endX <= maxX) ||
+                            (startX < minX && endX > maxX) || (startX > maxX && endX < minX))
+                        {
+                            g.DrawLine(gridPen, startX, startY, endX, endY);
+                        }
+                    }
+                }
+            }
+        }
+
         private void DrawEnemy(Graphics g, EnemyData enemy, bool isDragging)
         {
-            float screenX = enemy.X;
-            float screenY = enemy.Y;
+            float centerX = enemy.X;
+            float centerY = enemy.Y;
             
-            // Draw enemy as a red square
+            // Isometric diamond dimensions (scaled down from tile size)
+            float halfWidth = 32.0f;  // Half width of the isometric box
+            float halfHeight = 16.0f; // Half height of the isometric box
+            
+            // Define the 4 points of the isometric diamond
+            PointF[] diamondPoints = new PointF[]
+            {
+                new PointF(centerX, centerY - halfHeight),                    // Top
+                new PointF(centerX + halfWidth, centerY),                     // Right
+                new PointF(centerX, centerY + halfHeight),                    // Bottom
+                new PointF(centerX - halfWidth, centerY)                      // Left
+            };
+            
+            // Draw filled isometric diamond
             using (SolidBrush brush = new SolidBrush(isDragging ? Color.Orange : Color.DarkRed))
             {
-                RectangleF rect = new RectangleF(screenX - 16, screenY - 16, 32, 32);
-                g.FillRectangle(brush, rect);
+                g.FillPolygon(brush, diamondPoints);
             }
             
             // Draw outline
             using (Pen pen = new Pen(Color.White, 2))
             {
-                RectangleF rect = new RectangleF(screenX - 16, screenY - 16, 32, 32);
-                g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
+                g.DrawPolygon(pen, diamondPoints);
             }
         }
 
         private void DrawPlayer(Graphics g, PlayerData player, bool isDragging)
         {
-            float screenX = player.X;
-            float screenY = player.Y;
+            float centerX = player.X;
+            float centerY = player.Y;
             
-            // Draw player as a red square (slightly larger than enemy)
+            // Isometric diamond dimensions (slightly larger than enemy)
+            float halfWidth = 40.0f;  // Half width of the isometric box
+            float halfHeight = 20.0f; // Half height of the isometric box
+            
+            // Define the 4 points of the isometric diamond
+            PointF[] diamondPoints = new PointF[]
+            {
+                new PointF(centerX, centerY - halfHeight),                    // Top
+                new PointF(centerX + halfWidth, centerY),                     // Right
+                new PointF(centerX, centerY + halfHeight),                    // Bottom
+                new PointF(centerX - halfWidth, centerY)                      // Left
+            };
+            
+            // Draw filled isometric diamond
             using (SolidBrush brush = new SolidBrush(isDragging ? Color.Yellow : Color.Red))
             {
-                RectangleF rect = new RectangleF(screenX - 20, screenY - 20, 40, 40);
-                g.FillRectangle(brush, rect);
+                g.FillPolygon(brush, diamondPoints);
             }
             
             // Draw outline
             using (Pen pen = new Pen(Color.White, 2))
             {
-                RectangleF rect = new RectangleF(screenX - 20, screenY - 20, 40, 40);
-                g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
+                g.DrawPolygon(pen, diamondPoints);
             }
         }
 

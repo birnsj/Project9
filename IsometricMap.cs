@@ -64,6 +64,9 @@ namespace Project9
                     
                     if (mapData != null)
                     {
+                        // Migrate legacy tile coordinates to pixel coordinates
+                        MigrateLegacyCoordinates(mapData);
+                        
                         _mapData = mapData; // Store map data for access to enemies
                         _mapWidth = mapData.Width;
                         _mapHeight = mapData.Height;
@@ -180,6 +183,31 @@ namespace Project9
             float centerScreenX = (centerTileX - centerTileY) * (IsometricTile.TileWidth / 2.0f);
             float centerScreenY = (centerTileX + centerTileY) * (IsometricTile.TileHeight / 2.0f);
             return new Vector2(centerScreenX, centerScreenY);
+        }
+
+        private static void MigrateLegacyCoordinates(MapData mapData)
+        {
+            // Convert legacy tile coordinates to pixel coordinates
+            // If X/Y values are small (< 1000), they're likely tile coordinates
+            
+            // Migrate player
+            if (mapData.Player != null && mapData.Player.X < 1000 && mapData.Player.Y < 1000)
+            {
+                var (screenX, screenY) = IsometricMath.TileToScreen((int)mapData.Player.X, (int)mapData.Player.Y);
+                mapData.Player.X = screenX;
+                mapData.Player.Y = screenY;
+            }
+            
+            // Migrate enemies
+            foreach (var enemy in mapData.Enemies)
+            {
+                if (enemy.X < 1000 && enemy.Y < 1000)
+                {
+                    var (screenX, screenY) = IsometricMath.TileToScreen((int)enemy.X, (int)enemy.Y);
+                    enemy.X = screenX;
+                    enemy.Y = screenY;
+                }
+            }
         }
     }
 }

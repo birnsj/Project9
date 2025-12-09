@@ -25,6 +25,7 @@ namespace Project9
         private Texture2D? _circleTexture;
         private Texture2D? _sightConeTexture;
         private Texture2D? _exclamationTexture;
+        private Texture2D? _diamondTexture;
         private bool _hasDetectedPlayer;
         private float _exclamationTimer; // Timer for exclamation mark display
         private float _exclamationDuration; // How long to show exclamation
@@ -398,7 +399,8 @@ namespace Project9
             Vector2 center = new Vector2(size / 2.0f, size / 2.0f);
             float halfAngle = _sightConeAngle / 2.0f;
             
-            // Pre-calculate direction vectors for the cone edges
+            // Create a generic cone texture that can be rotated smoothly
+            // The cone will be drawn pointing right (0 degrees) and rotated when drawn
             Vector2 forwardDir = new Vector2(1, 0); // Pointing right (0 degrees)
             Vector2 leftEdge = new Vector2(
                 (float)Math.Cos(-halfAngle),
@@ -460,8 +462,9 @@ namespace Project9
                 
                 if (_sightConeTexture != null)
                 {
-                    // Draw sight cone rotated
+                    // Draw sight cone with smooth rotation (no snapping)
                     Vector2 origin = new Vector2(_sightConeTexture.Width / 2.0f, _sightConeTexture.Height / 2.0f);
+                    
                     spriteBatch.Draw(
                         _sightConeTexture,
                         _position,
@@ -475,6 +478,45 @@ namespace Project9
                     );
                 }
             }
+        }
+
+        private void CreateDiamondTexture(GraphicsDevice graphicsDevice)
+        {
+            int halfWidth = 32;
+            int halfHeight = 16;
+            int width = halfWidth * 2;
+            int height = halfHeight * 2;
+            
+            _diamondTexture = new Texture2D(graphicsDevice, width, height);
+            Color[] colorData = new Color[width * height];
+            
+            Vector2 center = new Vector2(halfWidth, halfHeight);
+            
+            for (int x = 0; x < width; x++)
+            {
+                for (int y = 0; y < height; y++)
+                {
+                    Vector2 pos = new Vector2(x, y);
+                    
+                    // Check if point is inside the diamond shape
+                    // Diamond formula: |x - cx|/hw + |y - cy|/hh <= 1
+                    float dx = Math.Abs(x - center.X);
+                    float dy = Math.Abs(y - center.Y);
+                    float normalizedX = dx / halfWidth;
+                    float normalizedY = dy / halfHeight;
+                    
+                    if (normalizedX + normalizedY <= 1.0f)
+                    {
+                        colorData[y * width + x] = Color.White; // Will be tinted when drawing
+                    }
+                    else
+                    {
+                        colorData[y * width + x] = Color.Transparent;
+                    }
+                }
+            }
+            
+            _diamondTexture.SetData(colorData);
         }
 
         private void CreateExclamationTexture(GraphicsDevice graphicsDevice)
@@ -536,12 +578,19 @@ namespace Project9
 
             if (visible)
             {
+                // Create diamond texture if needed
+                if (_diamondTexture == null)
+                {
+                    CreateDiamondTexture(spriteBatch.GraphicsDevice);
+                }
+                
                 // Change color when attacking
                 Color drawColor = _isAttacking ? Color.OrangeRed : _color;
 
-                // Draw enemy centered at position
-                Vector2 drawPosition = _position - new Vector2(_size / 2.0f, _size / 2.0f);
-                spriteBatch.Draw(_texture, new Rectangle((int)drawPosition.X, (int)drawPosition.Y, _size, _size), drawColor);
+                // Draw isometric diamond centered at position
+                // Diamond is 64x32 (halfWidth=32, halfHeight=16)
+                Vector2 drawPosition = _position - new Vector2(32, 16);
+                spriteBatch.Draw(_diamondTexture, drawPosition, drawColor);
             }
             
             // Draw exclamation mark if just detected player

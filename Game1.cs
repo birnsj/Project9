@@ -28,6 +28,8 @@ namespace Project9
         private SpriteFont? _uiFont;
         private Vector2 _screenCenter;
         private bool _cameraFollowingPlayer = true;
+        private bool _showGrid64x32 = false;
+        private Texture2D? _gridLineTexture;
 
         public Game1()
         {
@@ -200,6 +202,13 @@ namespace Project9
                 _cameraFollowingPlayer = true;
             }
 
+            // Handle G key to toggle 64x32 grid
+            if (currentKeyboardState.IsKeyDown(Keys.G) && 
+                !_previousKeyboardState.IsKeyDown(Keys.G))
+            {
+                _showGrid64x32 = !_showGrid64x32;
+            }
+
             // Handle WASD for camera panning
             Vector2 panDirection = Vector2.Zero;
             if (currentKeyboardState.IsKeyDown(Keys.W))
@@ -331,6 +340,12 @@ namespace Project9
 
             _map.Draw(_spriteBatch);
 
+            // Draw 64x32 grid if enabled
+            if (_showGrid64x32)
+            {
+                DrawGrid64x32(_spriteBatch);
+            }
+
             // Draw all enemy aggro radii, sight cones, and enemies
             foreach (var enemy in _enemies)
             {
@@ -403,6 +418,125 @@ namespace Project9
             // So: world = screen / zoom + position
             Vector2 worldPos = screenPosition / _camera.Zoom + _camera.Position;
             return worldPos;
+        }
+
+        private void CreateGridLineTexture(GraphicsDevice graphicsDevice)
+        {
+            _gridLineTexture = new Texture2D(graphicsDevice, 1, 1);
+            _gridLineTexture.SetData(new[] { new Color(100, 80, 80, 80) }); // Dark gray, semi-transparent
+        }
+
+        private void DrawGrid64x32(SpriteBatch spriteBatch)
+        {
+            const float gridX = 64.0f;
+            
+            // Create grid line texture if needed
+            if (_gridLineTexture == null)
+            {
+                CreateGridLineTexture(spriteBatch.GraphicsDevice);
+            }
+
+            // Calculate visible area in world coordinates
+            Vector2 topLeft = ScreenToWorld(Vector2.Zero);
+            Vector2 bottomRight = ScreenToWorld(new Vector2(
+                GraphicsDevice.Viewport.Width,
+                GraphicsDevice.Viewport.Height
+            ));
+
+            // Expand bounds to ensure we draw enough grid lines
+            float minX = topLeft.X - IsometricMath.TileWidth * 2;
+            float maxX = bottomRight.X + IsometricMath.TileWidth * 2;
+            float minY = topLeft.Y - IsometricMath.TileHeight * 2;
+            float maxY = bottomRight.Y + IsometricMath.TileHeight * 2;
+
+            // Convert visible area to tile coordinates to find which tiles are visible
+            var (minTileX, minTileY) = IsometricMath.ScreenToTile(minX, minY);
+            var (maxTileX, maxTileY) = IsometricMath.ScreenToTile(maxX, maxY);
+
+            // Expand tile range
+            minTileX -= 3;
+            minTileY -= 3;
+            maxTileX += 3;
+            maxTileY += 3;
+
+            // Grid cells per tile: 1024/64 = 16 cells horizontally
+            const int gridCellsPerTile = (int)(IsometricMath.TileWidth / gridX);
+
+            // Draw lines parallel to tile edges (isometric lines)
+            // Lines going northeast-southwest (parallel to tile top/bottom edges)
+            for (int tileX = minTileX; tileX <= maxTileX; tileX++)
+            {
+                for (int gridCell = 0; gridCell < gridCellsPerTile; gridCell++)
+                {
+                    // Calculate offset within the tile
+                    float cellProgress = gridCell / (float)gridCellsPerTile;
+                    float offsetX = cellProgress * (IsometricMath.TileWidth / 2.0f);
+                    float offsetY = cellProgress * (IsometricMath.TileHeight / 2.0f);
+
+                    // Draw line from bottom to top of visible area
+                    var (startX, startY) = IsometricMath.TileToScreen(tileX, minTileY);
+                    startX += offsetX;
+                    startY += offsetY;
+
+                    var (endX, endY) = IsometricMath.TileToScreen(tileX, maxTileY);
+                    endX += offsetX;
+                    endY += offsetY;
+
+                    // Clip to visible bounds
+                    if ((startY >= minY && startY <= maxY) || (endY >= minY && endY <= maxY) ||
+                        (startY < minY && endY > maxY) || (startY > maxY && endY < minY))
+                    {
+                        DrawLine(spriteBatch, new Vector2(startX, startY), new Vector2(endX, endY), _gridLineTexture!);
+                    }
+                }
+            }
+
+            // Lines going northwest-southeast (parallel to tile left/right edges)
+            for (int tileY = minTileY; tileY <= maxTileY; tileY++)
+            {
+                for (int gridCell = 0; gridCell < gridCellsPerTile; gridCell++)
+                {
+                    // Calculate offset within the tile (negative X, positive Y)
+                    float cellProgress = gridCell / (float)gridCellsPerTile;
+                    float offsetX = -cellProgress * (IsometricMath.TileWidth / 2.0f);
+                    float offsetY = cellProgress * (IsometricMath.TileHeight / 2.0f);
+
+                    // Draw line from left to right of visible area
+                    var (startX, startY) = IsometricMath.TileToScreen(minTileX, tileY);
+                    startX += offsetX;
+                    startY += offsetY;
+
+                    var (endX, endY) = IsometricMath.TileToScreen(maxTileX, tileY);
+                    endX += offsetX;
+                    endY += offsetY;
+
+                    // Clip to visible bounds
+                    if ((startX >= minX && startX <= maxX) || (endX >= minX && endX <= maxX) ||
+                        (startX < minX && endX > maxX) || (startX > maxX && endX < minX))
+                    {
+                        DrawLine(spriteBatch, new Vector2(startX, startY), new Vector2(endX, endY), _gridLineTexture!);
+                    }
+                }
+            }
+        }
+
+        private void DrawLine(SpriteBatch spriteBatch, Vector2 start, Vector2 end, Texture2D texture)
+        {
+            Vector2 edge = end - start;
+            float angle = (float)Math.Atan2(edge.Y, edge.X);
+            float length = edge.Length();
+
+            spriteBatch.Draw(
+                texture,
+                start,
+                null,
+                Color.White,
+                angle,
+                Vector2.Zero,
+                new Vector2(length, 1),
+                SpriteEffects.None,
+                0.0f
+            );
         }
     }
 }
