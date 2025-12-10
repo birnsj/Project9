@@ -45,44 +45,105 @@ namespace Project9
 
         public void SetTarget(Vector2 target, Func<Vector2, bool>? checkCollision = null, Func<Vector2, bool>? checkTerrainOnly = null)
         {
-            // Check if target location itself is blocked by TERRAIN collision only
-            if (checkTerrainOnly != null && checkTerrainOnly(target))
-            {
-                Console.WriteLine("[Player] Target location is blocked by terrain - click ignored");
-                return;
-            }
-            else if (checkCollision != null && checkTerrainOnly == null && checkCollision(target))
-            {
-                Console.WriteLine("[Player] Target location is blocked by collision - click ignored");
-                return;
-            }
+            // Always set target immediately, even if the exact location is blocked
+            // This ensures clicks are never ignored - we'll try to get as close as possible
+            // IMPORTANT: Completely reset all movement state to prevent progressive issues
+            
+            // Log the current state before setting new target (to detect timing issues)
+            string pathInfo = _path != null && _path.Count > 0 ? $"{_path.Count} waypoints" : "none";
+            string movingState = _currentSpeed > 0.1f ? $"moving at {_currentSpeed:F1}px/s" : "stationary";
+            string oldTargetInfo = _targetPosition.HasValue ? $"({_targetPosition.Value.X:F1}, {_targetPosition.Value.Y:F1})" : "none";
+            
+            LogOverlay.Log($"[Player] NEW TARGET SET - Old target: {oldTargetInfo}, Path: {pathInfo}, State: {movingState}", LogLevel.Info);
+            LogOverlay.Log($"[Player] Current pos: ({_position.X:F1}, {_position.Y:F1}) -> New target: ({target.X:F1}, {target.Y:F1})", LogLevel.Info);
             
             _targetPosition = target;
             _waypoint = null;
-            _path?.Clear();
+            _path = null; // Use null instead of Clear() to ensure it's truly cleared
             _stuckTimer = 0.0f;
+            _currentSpeed = 0.0f; // Reset speed to ensure fresh start
             
-            // Check if direct path is clear
+            // Check if target location itself is blocked by TERRAIN collision
+            bool targetBlockedByTerrain = checkTerrainOnly != null && checkTerrainOnly(target);
+            bool targetBlockedByCollision = checkCollision != null && checkCollision(target);
+            
+            if (targetBlockedByTerrain)
+            {
+                LogOverlay.Log("[Player] Target location is blocked by terrain - will attempt to get as close as possible", LogLevel.Warning);
+            }
+            else if (targetBlockedByCollision && checkTerrainOnly == null)
+            {
+                LogOverlay.Log("[Player] Target location is blocked by collision - will attempt to get as close as possible", LogLevel.Warning);
+            }
+            
+            // Check if direct path is clear (quick check first)
             if (checkCollision != null)
             {
                 Vector2 direction = target - _position;
                 float distance = direction.Length();
                 
-                bool pathClear = true;
-                int samples = (int)(distance / 16.0f) + 1;
-                for (int i = 0; i <= samples; i++)
+                // CRITICAL: Check if player's CURRENT position is in collision while moving
+                // This can happen if player is mid-movement through collision buffer zone
+                bool playerPosInCollision = checkCollision(_position);
+                if (playerPosInCollision)
                 {
-                    float t = (float)i / samples;
-                    Vector2 samplePoint = _position + (target - _position) * t;
-                    if (checkCollision(samplePoint))
+                    LogOverlay.Log($"[Player] WARNING: Player position ({_position.X:F1}, {_position.Y:F1}) is IN COLLISION while moving! This affects path checks.", LogLevel.Error);
+                }
+                
+                // Skip direct path check if target itself is blocked by terrain
+                // (we'll need pathfinding anyway)
+                bool pathClear = !targetBlockedByTerrain;
+                
+                if (pathClear && distance > 0.1f)
+                {
+                    // More thorough direct path check with denser sampling
+                    // Check every 16 pixels for better obstacle detection
+                    int samples = Math.Max(2, (int)(distance / 16.0f) + 1); // Denser sampling
+                    LogOverlay.Log($"[Player] Checking direct path with {samples} samples over {distance:F1} pixels (player in collision: {playerPosInCollision})", LogLevel.Info);
+                    
+                    // If player is currently in collision, force pathfinding
+                    if (playerPosInCollision)
                     {
+                        LogOverlay.Log($"[Player] FORCING PATHFINDING - player position in collision", LogLevel.Warning);
                         pathClear = false;
-                        break;
+                    }
+                    else
+                    {
+                        // Check all points including start and end (but skip exact start/end positions)
+                        for (int i = 0; i <= samples; i++)
+                        {
+                            float t = (float)i / samples;
+                            // Skip exact start (t=0) and exact end (t=1) as they're checked separately
+                            if (t < 0.01f || t > 0.99f)
+                                continue;
+                                
+                            Vector2 samplePoint = _position + (target - _position) * t;
+                            bool hasCollision = checkCollision(samplePoint);
+                            
+                            if (hasCollision)
+                            {
+                                LogOverlay.Log($"[Player] Direct path BLOCKED at sample {i}/{samples} at ({samplePoint.X:F1}, {samplePoint.Y:F1})", LogLevel.Warning);
+                                pathClear = false;
+                                break;
+                            }
+                        }
                     }
                 }
                 
-                if (!pathClear)
+                if (pathClear && !targetBlockedByTerrain)
                 {
+                    LogOverlay.Log("[Player] Direct path check PASSED - all samples clear", LogLevel.Info);
+                }
+                else if (!pathClear)
+                {
+                    LogOverlay.Log("[Player] Direct path check FAILED - obstacle detected", LogLevel.Warning);
+                }
+                
+                // Use pathfinding if direct path is blocked OR if target is blocked by terrain
+                if (!pathClear || targetBlockedByTerrain)
+                {
+                    LogOverlay.Log($"[Player] Starting pathfinding from ({_position.X:F1}, {_position.Y:F1}) to ({target.X:F1}, {target.Y:F1})", LogLevel.Info);
+                    
                     _path = PathfindingService.FindPath(
                         _position, 
                         target, 
@@ -93,14 +154,32 @@ namespace Project9
                     
                     if (_path == null || _path.Count == 0)
                     {
-                        Console.WriteLine("[Player] Pathfinding failed - no path found to target");
+                        LogOverlay.Log("[Player] Pathfinding FAILED - will attempt direct movement with collision sliding", LogLevel.Error);
+                        // Clear path to ensure we try direct movement
+                        _path = null;
+                        // Reset stuck timer so we can immediately try to move
+                        _stuckTimer = 0.0f;
                     }
                     else
                     {
                         // Smooth the path to remove unnecessary waypoints
                         _path = PathfindingService.SimplifyPath(_path);
+                        LogOverlay.Log($"[Player] Pathfinding SUCCEEDED - {_path.Count} waypoints", LogLevel.Info);
                     }
                 }
+                else
+                {
+                    // Direct path is clear - ensure path is cleared and stuck timer is reset
+                    _path = null;
+                    _stuckTimer = 0.0f;
+                    LogOverlay.Log($"[Player] Direct path clear - no pathfinding needed. Target: ({target.X:F1}, {target.Y:F1})", LogLevel.Info);
+                }
+            }
+            else
+            {
+                // No collision checking - clear path and reset stuck timer
+                _path = null;
+                _stuckTimer = 0.0f;
             }
         }
 
@@ -134,11 +213,13 @@ namespace Project9
             {
                 if (_path != null && _path.Count > 0)
                 {
+                    int initialPathCount = _path.Count;
                     while (_path.Count > 0)
                     {
                         float distToNext = Vector2.Distance(_position, _path[0]);
                         if (distToNext < 10.0f)
                         {
+                            LogOverlay.Log($"[Player] Removing waypoint at ({_path[0].X:F1}, {_path[0].Y:F1}) - within 10px (dist={distToNext:F1})", LogLevel.Debug);
                             _path.RemoveAt(0);
                         }
                         else
@@ -146,10 +227,29 @@ namespace Project9
                             break;
                         }
                     }
+                    if (_path.Count < initialPathCount)
+                    {
+                        LogOverlay.Log($"[Player] Removed {initialPathCount - _path.Count} waypoints, {_path.Count} remaining", LogLevel.Info);
+                    }
                     
                     if (_path.Count > 0)
                     {
                         moveTarget = _path[0];
+                        // Ensure we have a valid target - if path waypoint is too close, use next one or target
+                        float distToWaypoint = Vector2.Distance(_position, _path[0]);
+                        if (distToWaypoint < 5.0f && _path.Count > 1)
+                        {
+                            // Skip to next waypoint if current one is too close
+                            _path.RemoveAt(0);
+                            moveTarget = _path[0];
+                        }
+                        else if (distToWaypoint < 5.0f && _path.Count == 1)
+                        {
+                            // Last waypoint is too close, go directly to target
+                            LogOverlay.Log($"[Player] Clearing path - last waypoint too close ({distToWaypoint:F1}px), going to target", LogLevel.Info);
+                            _path.Clear();
+                            moveTarget = _targetPosition.Value;
+                        }
                     }
                     else
                     {
@@ -193,10 +293,12 @@ namespace Project9
                 
                 if (distance <= stopThreshold && isFinalTarget && _targetPosition.HasValue)
                 {
+                    LogOverlay.Log($"[Player] Reached target! Distance={distance:F2}px, Threshold={stopThreshold:F2}px", LogLevel.Info);
                     _position = _targetPosition.Value;
                     _targetPosition = null;
                     _waypoint = null;
-                    _path?.Clear();
+                    _path = null; // Use null instead of Clear() to ensure it's truly cleared
+                    _stuckTimer = 0.0f;
                     _currentSpeed = 0.0f;
                 }
                 else if (distance > stopThreshold)
@@ -217,7 +319,9 @@ namespace Project9
                         // Move with swept collision and sliding
                         Vector2 newPos = collisionManager.MoveWithCollision(_position, nextPosition, true);
                         
-                        if (Vector2.DistanceSquared(_position, newPos) > 0.01f)
+                        // Accept any movement, even small ones, to prevent getting stuck when path exists
+                        // This ensures the player continues moving along the path even with small movements
+                        if (newPos != _position)
                         {
                             _position = newPos;
                             _stuckTimer = 0.0f;

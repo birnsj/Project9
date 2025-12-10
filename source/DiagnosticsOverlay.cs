@@ -13,6 +13,7 @@ namespace Project9
     {
         private SpriteFont? _font;
         private bool _isVisible = false;
+        private static Texture2D? _whiteTexture;
         
         // FPS tracking
         private Queue<float> _frameTimeHistory = new Queue<float>(60);
@@ -140,16 +141,42 @@ namespace Project9
             int screenWidth = graphicsDevice.Viewport.Width;
             int screenHeight = graphicsDevice.Viewport.Height;
             
-            // Background panel
-            Vector2 panelPos = new Vector2(10, 10);
-            Vector2 panelSize = new Vector2(350, 400);
+            // Position on right side with margin
+            float margin = 10f;
+            float panelWidth = 320f; // Fixed width
+            Vector2 panelPos = new Vector2(screenWidth - panelWidth - margin, margin);
+            
+            // Calculate available height
+            float availableHeight = screenHeight - (margin * 2);
+            
+            // Count total lines
+            int totalLines = 32; // Count of all text lines including headers and blank lines
+            
+            // Calculate base line height and scale to fit
+            float baseLineHeight = _font.LineSpacing + 2;
+            float requiredHeight = (totalLines * baseLineHeight) + 20; // Add padding
+            
+            // Scale line height if content doesn't fit
+            float lineHeight = baseLineHeight;
+            float scale = 1.0f;
+            if (requiredHeight > availableHeight)
+            {
+                scale = (availableHeight - 20) / (totalLines * baseLineHeight);
+                lineHeight = baseLineHeight * scale;
+            }
+            
+            // Store scale for DrawText to use
+            _currentLineHeight = lineHeight;
+            _currentTextScale = scale;
+            
+            float panelHeight = (totalLines * lineHeight) + 20;
+            Vector2 panelSize = new Vector2(panelWidth, panelHeight);
             
             // Draw semi-transparent background
             DrawPanel(spriteBatch, graphicsDevice, panelPos, panelSize, new Color(0, 0, 0, 180));
             
-            // Draw text
+            // Draw text with scaling
             Vector2 textPos = panelPos + new Vector2(10, 10);
-            float lineHeight = _font.LineSpacing + 2;
             int lineIndex = 0;
             
             // Header
@@ -201,25 +228,39 @@ namespace Project9
             DrawText(spriteBatch, "Press R to reset FPS stats", textPos, lineIndex++, Color.Gray);
         }
         
+        private float _currentLineHeight = 0f;
+        private float _currentTextScale = 1.0f;
+        
         private void DrawText(SpriteBatch spriteBatch, string text, Vector2 basePos, int lineIndex, Color color)
         {
             if (_font == null) return;
             
-            float lineHeight = _font.LineSpacing + 2;
-            Vector2 position = basePos + new Vector2(0, lineIndex * lineHeight);
+            Vector2 position = basePos + new Vector2(0, lineIndex * _currentLineHeight);
             
             // Draw shadow for better readability
-            spriteBatch.DrawString(_font, text, position + new Vector2(1, 1), Color.Black);
-            spriteBatch.DrawString(_font, text, position, color);
+            if (_currentTextScale != 1.0f)
+            {
+                // Scale text by drawing with scale
+                spriteBatch.DrawString(_font, text, position + new Vector2(1, 1) * _currentTextScale, Color.Black, 0f, Vector2.Zero, _currentTextScale, SpriteEffects.None, 0f);
+                spriteBatch.DrawString(_font, text, position, color, 0f, Vector2.Zero, _currentTextScale, SpriteEffects.None, 0f);
+            }
+            else
+            {
+                spriteBatch.DrawString(_font, text, position + new Vector2(1, 1), Color.Black);
+                spriteBatch.DrawString(_font, text, position, color);
+            }
         }
         
         private void DrawPanel(SpriteBatch spriteBatch, GraphicsDevice graphicsDevice, Vector2 position, Vector2 size, Color color)
         {
-            // Create a 1x1 white texture if we don't have one
-            Texture2D? whiteTexture = new Texture2D(graphicsDevice, 1, 1);
-            whiteTexture.SetData(new[] { Color.White });
+            // Use cached white texture
+            if (_whiteTexture == null || _whiteTexture.IsDisposed)
+            {
+                _whiteTexture = new Texture2D(graphicsDevice, 1, 1);
+                _whiteTexture.SetData(new[] { Color.White });
+            }
             
-            spriteBatch.Draw(whiteTexture, new Rectangle((int)position.X, (int)position.Y, (int)size.X, (int)size.Y), color);
+            spriteBatch.Draw(_whiteTexture, new Rectangle((int)position.X, (int)position.Y, (int)size.X, (int)size.Y), color);
         }
         
         private Color GetFPSColor(float fps)

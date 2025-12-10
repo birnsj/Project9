@@ -17,11 +17,15 @@ namespace Project9
         private System.Diagnostics.Stopwatch _pathfindingStopwatch = new System.Diagnostics.Stopwatch();
         private float _lastPathfindingTimeMs = 0.0f;
         private int _activePathfindingCount = 0;
+        
+        // Track if player is following cursor (for UI purposes)
+        private bool _isFollowingCursor = false;
 
         public Player Player => _player;
         public List<Enemy> Enemies => _enemies;
         public float LastPathfindingTimeMs => _lastPathfindingTimeMs;
         public int ActivePathfindingCount => _activePathfindingCount;
+        public bool IsFollowingCursor => _isFollowingCursor;
 
         public EntityManager(Player player, CollisionManager collisionManager)
         {
@@ -54,6 +58,9 @@ namespace Project9
         {
             _pathfindingStopwatch.Restart();
             _activePathfindingCount = 0;
+            
+            // Track if player is following cursor
+            _isFollowingCursor = followPosition.HasValue;
             
             // Update player movement with CollisionManager for perfect collision resolution
             _player.Update(
@@ -106,7 +113,19 @@ namespace Project9
         /// </summary>
         public void MovePlayerTo(Vector2 target)
         {
-            Console.WriteLine($"[EntityManager] Move player to ({target.X:F0}, {target.Y:F0})");
+            // Check if enemies are blocking the path (they move, so timing matters)
+            bool enemyNearTarget = false;
+            foreach (var enemy in _enemies)
+            {
+                float distToTarget = Vector2.Distance(enemy.Position, target);
+                if (distToTarget < 50.0f) // Within enemy collision radius
+                {
+                    enemyNearTarget = true;
+                    LogOverlay.Log($"[EntityManager] Enemy near target at ({enemy.Position.X:F1}, {enemy.Position.Y:F1}), dist={distToTarget:F1}px", LogLevel.Warning);
+                }
+            }
+            
+            Console.WriteLine($"[EntityManager] Move player to ({target.X:F0}, {target.Y:F0}), EnemyNear={enemyNearTarget}");
             _player.SetTarget(
                 target, 
                 (pos) => _collisionManager.CheckCollision(pos),

@@ -22,6 +22,7 @@ namespace Project9
         private InputManager _inputManager = null!;
         private RenderSystem _renderSystem = null!;
         private DiagnosticsOverlay _diagnostics = null!;
+        private LogOverlay _logOverlay = null!;
         
         // Performance tracking
         private System.Diagnostics.Stopwatch _updateStopwatch = new System.Diagnostics.Stopwatch();
@@ -106,11 +107,18 @@ namespace Project9
             _inputManager = new InputManager(_camera, ScreenToWorld);
             _renderSystem = new RenderSystem(GraphicsDevice, _spriteBatch, _map, _camera, _uiFont);
             _diagnostics = new DiagnosticsOverlay();
+            _logOverlay = new LogOverlay();
             
-            // Initialize diagnostics with font
+            // Initialize diagnostics and log overlay with font
             if (_uiFont != null)
             {
                 _diagnostics.Initialize(_uiFont);
+                _logOverlay.Initialize(_uiFont);
+                LogOverlay.Log("Game initialized - Log overlay ready", LogLevel.Info);
+            }
+            else
+            {
+                Console.WriteLine("[Game] Warning: UI font not loaded - log overlay will not display");
             }
 
             // Center camera on player
@@ -199,10 +207,14 @@ namespace Project9
             // Update FPS
             _diagnostics.UpdateFPS(deltaTime);
 
-            // Process input
+            // Process input - Myra Desktop input disabled to prevent click consumption
             _inputStopwatch.Restart();
             var inputEvent = _inputManager.ProcessInput(deltaTime, _entityManager.Player, _entityManager.Enemies);
             _inputStopwatch.Stop();
+            
+            // Don't call Myra Desktop UpdateInput - it may be consuming/altering mouse state
+            // Myra UI will still render correctly, we just won't process its input events
+            // _desktop.UpdateInput();
 
             // Handle input events
             Vector2? followPosition = null;
@@ -219,7 +231,9 @@ namespace Project9
                         break;
 
                     case InputAction.MoveTo:
+                        LogOverlay.Log($"[Input] Move to: ({inputEvent.WorldPosition.X:F1}, {inputEvent.WorldPosition.Y:F1})", LogLevel.Info);
                         _entityManager.MovePlayerTo(inputEvent.WorldPosition);
+                        _renderSystem.ShowClickEffect(inputEvent.WorldPosition);
                         break;
 
                     case InputAction.DragFollow:
@@ -263,6 +277,10 @@ namespace Project9
                         _diagnostics.ResetFPSStats();
                         Console.WriteLine("[Diagnostics] FPS stats reset");
                         break;
+                    
+                    case InputAction.ToggleLog:
+                        _logOverlay.Toggle();
+                        break;
 
                     case InputAction.PanCamera:
                         _cameraFollowingPlayer = false;
@@ -274,6 +292,12 @@ namespace Project9
                         break;
                 }
             }
+
+            // Update click effect
+            _renderSystem.UpdateClickEffect(deltaTime);
+            
+            // Update log overlay
+            _logOverlay.Update(deltaTime);
 
             // Update entities
             _entityStopwatch.Restart();
@@ -342,6 +366,11 @@ namespace Project9
         protected override void Draw(GameTime gameTime)
         {
             _renderSystem.Render(_entityManager, _collisionManager, _desktop);
+            
+            // Draw log overlay
+            _spriteBatch.Begin();
+            _logOverlay.Draw(_spriteBatch, GraphicsDevice);
+            _spriteBatch.End();
             
             // Draw diagnostics overlay on top of everything
             if (_diagnostics.IsVisible)

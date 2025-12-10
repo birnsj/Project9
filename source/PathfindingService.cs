@@ -31,6 +31,8 @@ namespace Project9
         {
             lock (_lock) // Ensure thread safety
             {
+                // Log pathfinding attempt
+                LogOverlay.Log($"[Pathfinding] Attempting path from ({start.X:F1}, {start.Y:F1}) to ({end.X:F1}, {end.Y:F1})", LogLevel.Debug);
                 // Clear shared data structures
                 _sharedOpenSet.Clear();
                 _sharedGScore.Clear();
@@ -52,7 +54,95 @@ namespace Project9
                 // Early exit if start equals goal
                 if (startCell == endCell)
                 {
-                    return new List<Vector2> { end };
+                    // But check if the actual position is valid
+                    Vector2 endWorldPos = new Vector2(
+                        endCell.x * gridCellWidth + gridCellWidth / 2,
+                        endCell.y * gridCellHeight + gridCellHeight / 2
+                    );
+                    if (!checkCollision(endWorldPos))
+                    {
+                        return new List<Vector2> { end };
+                    }
+                    // If end is blocked, we'll need to find a path to a nearby valid cell
+                }
+                
+                // Check if end position is in collision - if so, try to find a nearby valid end
+                Vector2 endWorldPosCheck = new Vector2(
+                    endCell.x * gridCellWidth + gridCellWidth / 2,
+                    endCell.y * gridCellHeight + gridCellHeight / 2
+                );
+                
+                if (checkCollision(endWorldPosCheck))
+                {
+                    // End is blocked - try to find a nearby valid cell
+                    bool foundValidEnd = false;
+                    (int x, int y) originalEndCell = endCell;
+                    
+                    // Try nearby cells in expanding radius
+                    for (int radius = 1; radius <= 3 && !foundValidEnd; radius++)
+                    {
+                        for (int dx = -radius; dx <= radius && !foundValidEnd; dx++)
+                        {
+                            for (int dy = -radius; dy <= radius && !foundValidEnd; dy++)
+                            {
+                                if (Math.Abs(dx) < radius && Math.Abs(dy) < radius) continue; // Only check perimeter
+                                
+                                (int x, int y) testCell = (endCell.x + dx, endCell.y + dy);
+                                Vector2 testWorldPos = new Vector2(
+                                    testCell.x * gridCellWidth + gridCellWidth / 2,
+                                    testCell.y * gridCellHeight + gridCellHeight / 2
+                                );
+                                
+                                if (!checkCollision(testWorldPos))
+                                {
+                                    endCell = testCell;
+                                    foundValidEnd = true;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (!foundValidEnd)
+                    {
+                        LogOverlay.Log($"[Pathfinding] End position blocked and no nearby valid cells found at ({end.X:F1}, {end.Y:F1})", LogLevel.Warning);
+                    }
+                }
+                
+                // Check if start position is in collision - if so, try to find a nearby valid start
+                Vector2 startWorldPos = new Vector2(
+                    startCell.x * gridCellWidth + gridCellWidth / 2,
+                    startCell.y * gridCellHeight + gridCellHeight / 2
+                );
+                
+                if (checkCollision(startWorldPos))
+                {
+                    // Start is blocked - try to find a nearby valid cell
+                    bool foundValidStart = false;
+                    for (int dx = -1; dx <= 1 && !foundValidStart; dx++)
+                    {
+                        for (int dy = -1; dy <= 1 && !foundValidStart; dy++)
+                        {
+                            if (dx == 0 && dy == 0) continue;
+                            
+                            (int x, int y) testCell = (startCell.x + dx, startCell.y + dy);
+                            Vector2 testWorldPos = new Vector2(
+                                testCell.x * gridCellWidth + gridCellWidth / 2,
+                                testCell.y * gridCellHeight + gridCellHeight / 2
+                            );
+                            
+                            if (!checkCollision(testWorldPos))
+                            {
+                                startCell = testCell;
+                                foundValidStart = true;
+                            }
+                        }
+                    }
+                    
+                    // If still no valid start found, pathfinding will likely fail
+                    if (!foundValidStart)
+                    {
+                        LogOverlay.Log($"[Pathfinding] Start position blocked and no nearby valid cells found at ({start.X:F1}, {start.Y:F1})", LogLevel.Warning);
+                    }
                 }
                 
                 // Initialize A* data structures
@@ -73,7 +163,9 @@ namespace Project9
                     // Check if we reached the goal
                     if (current == endCell)
                     {
-                        return ReconstructPath(_sharedCameFrom, current, start, end, gridCellWidth, gridCellHeight);
+                        var path = ReconstructPath(_sharedCameFrom, current, start, end, gridCellWidth, gridCellHeight);
+                        LogOverlay.Log($"[Pathfinding] Path found successfully in {iterations} iterations, {path.Count} waypoints", LogLevel.Debug);
+                        return path;
                     }
                     
                     // Add to closed set
@@ -118,7 +210,21 @@ namespace Project9
                     }
                 }
                 
-                // No path found
+                // No path found - log reason
+                if (iterations >= MAX_ITERATIONS)
+                {
+                    LogOverlay.Log($"[Pathfinding] Failed: Hit MAX_ITERATIONS limit ({MAX_ITERATIONS}) - path too long or complex", LogLevel.Error);
+                    LogOverlay.Log($"[Pathfinding] Start: ({start.X:F1}, {start.Y:F1}) -> End: ({end.X:F1}, {end.Y:F1})", LogLevel.Debug);
+                    LogOverlay.Log($"[Pathfinding] Grid cells: Start({startCell.x}, {startCell.y}) -> End({endCell.x}, {endCell.y})", LogLevel.Debug);
+                }
+                else if (_sharedOpenSet.Count == 0)
+                {
+                    LogOverlay.Log($"[Pathfinding] Failed: No valid path exists - destination unreachable", LogLevel.Error);
+                    LogOverlay.Log($"[Pathfinding] Start: ({start.X:F1}, {start.Y:F1}) -> End: ({end.X:F1}, {end.Y:F1})", LogLevel.Debug);
+                    LogOverlay.Log($"[Pathfinding] Grid cells: Start({startCell.x}, {startCell.y}) -> End({endCell.x}, {endCell.y})", LogLevel.Debug);
+                    LogOverlay.Log($"[Pathfinding] Explored {iterations} cells before giving up", LogLevel.Debug);
+                }
+                
                 return null;
             }
         }

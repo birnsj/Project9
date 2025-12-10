@@ -19,6 +19,7 @@ namespace Project9
         ToggleCollisionSpheres,
         ToggleDiagnostics,
         ResetDiagnostics,
+        ToggleLog,
         ReturnCamera,
         PanCamera,
         Zoom
@@ -104,69 +105,59 @@ namespace Project9
             {
                 inputEvent = new InputEvent { Action = InputAction.ResetDiagnostics };
             }
-
-            // Handle WASD camera panning
-            Vector2 panDirection = Vector2.Zero;
-            if (currentKeyboardState.IsKeyDown(Keys.W)) panDirection.Y -= 1;
-            if (currentKeyboardState.IsKeyDown(Keys.S)) panDirection.Y += 1;
-            if (currentKeyboardState.IsKeyDown(Keys.A)) panDirection.X -= 1;
-            if (currentKeyboardState.IsKeyDown(Keys.D)) panDirection.X += 1;
-
-            if (panDirection != Vector2.Zero && inputEvent == null)
+            else if (currentKeyboardState.IsKeyDown(Keys.L) && 
+                     !_previousKeyboardState.IsKeyDown(Keys.L))
             {
-                panDirection.Normalize();
-                inputEvent = new InputEvent 
-                { 
-                    Action = InputAction.PanCamera,
-                    Direction = panDirection
-                };
+                inputEvent = new InputEvent { Action = InputAction.ToggleLog };
             }
 
-            // Handle mouse zoom
-            int scrollDelta = currentMouseState.ScrollWheelValue - _previousMouseState.ScrollWheelValue;
-            if (scrollDelta != 0 && inputEvent == null)
-            {
-                inputEvent = new InputEvent
-                {
-                    Action = InputAction.Zoom,
-                    ZoomDelta = scrollDelta,
-                    WorldPosition = _screenToWorld(new Vector2(currentMouseState.X, currentMouseState.Y))
-                };
-            }
-
+            // Handle mouse input FIRST - mouse clicks should have priority
             // Handle mouse input
             Vector2 mouseScreenPos = new Vector2(currentMouseState.X, currentMouseState.Y);
             Vector2 mouseWorldPos = _screenToWorld(mouseScreenPos);
+
+            // Check if click is over UI elements (top-left corner where UI panel is)
+            // UI panel is at (10, 10) with size 250x80, plus button below
+            bool isOverUI = mouseScreenPos.X >= 10 && mouseScreenPos.X <= 260 && 
+                           mouseScreenPos.Y >= 10 && mouseScreenPos.Y <= 130;
 
             // Left mouse button clicked
             if (currentMouseState.LeftButton == ButtonState.Pressed && 
                 _previousMouseState.LeftButton == ButtonState.Released)
             {
-                Console.WriteLine($"[InputManager] Mouse clicked at ({mouseWorldPos.X:F0}, {mouseWorldPos.Y:F0})");
-                
-                // Check for enemy attack
-                Enemy? targetEnemy = FindAttackableEnemy(mouseWorldPos, player, enemies);
-                
-                if (targetEnemy != null)
+                // Ignore clicks on UI elements
+                if (isOverUI)
                 {
-                    inputEvent = new InputEvent 
-                    { 
-                        Action = InputAction.Attack,
-                        TargetEnemy = targetEnemy,
-                        WorldPosition = mouseWorldPos
-                    };
-                    _isDragging = false;
-                    _clickStartPos = mouseWorldPos;
+                    Console.WriteLine($"[InputManager] Click ignored - over UI at ({mouseScreenPos.X:F0}, {mouseScreenPos.Y:F0})");
                 }
                 else
                 {
-                    inputEvent = new InputEvent 
-                    { 
-                        Action = InputAction.MoveTo,
-                        WorldPosition = mouseWorldPos
-                    };
+                    Console.WriteLine($"[InputManager] Mouse clicked at ({mouseWorldPos.X:F0}, {mouseWorldPos.Y:F0})");
+                    
+                    // Reset drag state on new click
                     _isDragging = false;
                     _clickStartPos = mouseWorldPos;
+                    
+                    // Check for enemy attack
+                    Enemy? targetEnemy = FindAttackableEnemy(mouseWorldPos, player, enemies);
+                    
+                    if (targetEnemy != null)
+                    {
+                        inputEvent = new InputEvent 
+                        { 
+                            Action = InputAction.Attack,
+                            TargetEnemy = targetEnemy,
+                            WorldPosition = mouseWorldPos
+                        };
+                    }
+                    else
+                    {
+                        inputEvent = new InputEvent 
+                        { 
+                            Action = InputAction.MoveTo,
+                            WorldPosition = mouseWorldPos
+                        };
+                    }
                 }
             }
             // Left mouse button held
@@ -203,10 +194,50 @@ namespace Project9
                 }
                 else
                 {
-                    Console.WriteLine("[InputManager] Click released (not dragging)");
+                    Console.WriteLine("[InputManager] Click released (not dragging) - single click move should have been processed");
+                    // Don't return an event - the MoveTo was already sent on click
+                }
+                
+                // Reset click start position on release to ensure clean state
+                _clickStartPos = mouseWorldPos;
+            }
+
+            // Handle WASD camera panning (only if no mouse event was processed)
+            if (inputEvent == null)
+            {
+                Vector2 panDirection = Vector2.Zero;
+                if (currentKeyboardState.IsKeyDown(Keys.W)) panDirection.Y -= 1;
+                if (currentKeyboardState.IsKeyDown(Keys.S)) panDirection.Y += 1;
+                if (currentKeyboardState.IsKeyDown(Keys.A)) panDirection.X -= 1;
+                if (currentKeyboardState.IsKeyDown(Keys.D)) panDirection.X += 1;
+
+                if (panDirection != Vector2.Zero)
+                {
+                    panDirection.Normalize();
+                    inputEvent = new InputEvent 
+                    { 
+                        Action = InputAction.PanCamera,
+                        Direction = panDirection
+                    };
                 }
             }
 
+            // Handle mouse zoom (only if no other event was processed)
+            if (inputEvent == null)
+            {
+                int scrollDelta = currentMouseState.ScrollWheelValue - _previousMouseState.ScrollWheelValue;
+                if (scrollDelta != 0)
+                {
+                    inputEvent = new InputEvent
+                    {
+                        Action = InputAction.Zoom,
+                        ZoomDelta = scrollDelta,
+                        WorldPosition = _screenToWorld(new Vector2(currentMouseState.X, currentMouseState.Y))
+                    };
+                }
+            }
+
+            // Always update previous state at the end to ensure proper tracking
             _previousKeyboardState = currentKeyboardState;
             _previousMouseState = currentMouseState;
 

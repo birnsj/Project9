@@ -24,13 +24,14 @@ namespace Project9
         protected float _runSpeed;
         protected float _currentSpeed;
         protected Vector2? _targetPosition;
-        protected List<Vector2> _path = new List<Vector2>();
+        protected List<Vector2>? _path; // Nullable to allow complete clearing
         protected Vector2? _waypoint;
         protected float _stuckTimer;
         protected const float STUCK_THRESHOLD = 0.5f;
 
         public float CurrentSpeed => _currentSpeed;
         public Vector2? TargetPosition => _targetPosition;
+        public List<Vector2>? Path => _path; // Expose path for debug visualization
 
         // ===== HEALTH =====
         protected float _maxHealth;
@@ -98,6 +99,9 @@ namespace Project9
         public virtual void ClearTarget()
         {
             _targetPosition = null;
+            _path = null; // Clear path completely
+            _waypoint = null;
+            _stuckTimer = 0.0f;
             _path?.Clear();
             _waypoint = null;
             _currentSpeed = 0f;

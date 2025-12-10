@@ -21,6 +21,13 @@ namespace Project9
         private bool _showCollisionSpheres = true; // Show collision spheres for entities
         private Texture2D? _gridLineTexture;
         private Texture2D? _collisionDiamondTexture;
+        private Texture2D? _clickEffectTexture;
+        private Texture2D? _pathLineTexture;
+        
+        // Click effect
+        private Vector2? _clickEffectPosition;
+        private float _clickEffectTimer = 0.0f;
+        private const float CLICK_EFFECT_DURATION = 0.5f;
         
         // Performance tracking
         private int _lastDrawCallCount = 0;
@@ -55,6 +62,31 @@ namespace Project9
         }
 
         /// <summary>
+        /// Show click effect at position
+        /// </summary>
+        public void ShowClickEffect(Vector2 worldPosition)
+        {
+            _clickEffectPosition = worldPosition;
+            _clickEffectTimer = CLICK_EFFECT_DURATION;
+        }
+
+        /// <summary>
+        /// Update click effect
+        /// </summary>
+        public void UpdateClickEffect(float deltaTime)
+        {
+            if (_clickEffectTimer > 0.0f)
+            {
+                _clickEffectTimer -= deltaTime;
+                if (_clickEffectTimer <= 0.0f)
+                {
+                    _clickEffectPosition = null;
+                    _clickEffectTimer = 0.0f;
+                }
+            }
+        }
+
+        /// <summary>
         /// Render everything
         /// </summary>
         public void Render(EntityManager entityManager, CollisionManager collisionManager, Desktop desktop)
@@ -70,6 +102,13 @@ namespace Project9
 
             _map.Draw(_spriteBatch);
             _lastDrawCallCount++;
+
+            // Draw click effect
+            if (_clickEffectPosition.HasValue && _clickEffectTimer > 0.0f)
+            {
+                DrawClickEffect(_spriteBatch);
+                _lastDrawCallCount++;
+            }
 
             if (_showGrid64x32)
             {
@@ -104,6 +143,12 @@ namespace Project9
             }
             entityManager.Player.Draw(_spriteBatch);
             _lastDrawCallCount += _showCollisionSpheres ? 2 : 1;
+            
+            // Draw debug path for player (only if not dragging/following cursor)
+            if (!entityManager.IsFollowingCursor)
+            {
+                DrawDebugPath(_spriteBatch, entityManager.Player);
+            }
 
             // Draw collision cells
             if (_showCollision)
@@ -299,6 +344,188 @@ namespace Project9
         private Vector2 ScreenToWorld(Vector2 screenPosition)
         {
             return screenPosition / _camera.Zoom + _camera.Position;
+        }
+
+        private void DrawDebugPath(SpriteBatch spriteBatch, Player player)
+        {
+            // Only draw if player has a target
+            if (!player.TargetPosition.HasValue)
+                return;
+            
+            // Create line texture if needed
+            if (_pathLineTexture == null)
+            {
+                _pathLineTexture = new Texture2D(_graphicsDevice, 1, 1);
+                _pathLineTexture.SetData(new[] { Color.White });
+            }
+            
+            // If there's a pathfinding path, draw it
+            if (player.Path != null && player.Path.Count > 0)
+            {
+                // Draw path from player position through all waypoints to target
+                Vector2? previousPoint = player.Position;
+                
+                // Draw lines connecting path waypoints
+                foreach (var waypoint in player.Path)
+                {
+                    if (previousPoint.HasValue)
+                    {
+                        DrawPathLine(spriteBatch, previousPoint.Value, waypoint, Color.Cyan);
+                    }
+                    previousPoint = waypoint;
+                }
+                
+                // Draw line to target if it exists and is different from last waypoint
+                if (player.TargetPosition.HasValue && previousPoint.HasValue)
+                {
+                    float distToTarget = Vector2.Distance(previousPoint.Value, player.TargetPosition.Value);
+                    if (distToTarget > 5.0f) // Only draw if target is significantly different
+                    {
+                        DrawPathLine(spriteBatch, previousPoint.Value, player.TargetPosition.Value, Color.Yellow);
+                    }
+                }
+                
+                // Draw waypoint markers
+                foreach (var waypoint in player.Path)
+                {
+                    DrawPathWaypoint(spriteBatch, waypoint, Color.Cyan);
+                }
+            }
+            else
+            {
+                // No pathfinding path - draw direct line to target
+                // Only draw if target is far enough away to be meaningful
+                float distToTarget = Vector2.Distance(player.Position, player.TargetPosition.Value);
+                if (distToTarget > 5.0f)
+                {
+                    DrawPathLine(spriteBatch, player.Position, player.TargetPosition.Value, Color.Lime);
+                    // Also draw target marker
+                    DrawPathWaypoint(spriteBatch, player.TargetPosition.Value, Color.Lime, 8.0f);
+                }
+            }
+            
+            // Draw target marker
+            if (player.TargetPosition.HasValue)
+            {
+                DrawPathWaypoint(spriteBatch, player.TargetPosition.Value, Color.Yellow, 8.0f);
+            }
+        }
+        
+        private void DrawPathLine(SpriteBatch spriteBatch, Vector2 start, Vector2 end, Color color)
+        {
+            Vector2 edge = end - start;
+            float angle = (float)Math.Atan2(edge.Y, edge.X);
+            float length = edge.Length();
+            
+            // Use semi-transparent color for path lines
+            Color lineColor = new Color(color.R, color.G, color.B, (byte)180);
+            
+            spriteBatch.Draw(
+                _pathLineTexture!,
+                start,
+                null,
+                lineColor,
+                angle,
+                Vector2.Zero,
+                new Vector2(length, 3.0f), // 3 pixel thick line
+                SpriteEffects.None,
+                0.0f
+            );
+        }
+        
+        private void DrawPathWaypoint(SpriteBatch spriteBatch, Vector2 position, Color color, float size = 6.0f)
+        {
+            if (_pathLineTexture == null)
+            {
+                _pathLineTexture = new Texture2D(_graphicsDevice, 1, 1);
+                _pathLineTexture.SetData(new[] { Color.White });
+            }
+            
+            // Draw a small circle/square at waypoint position
+            Color waypointColor = new Color(color.R, color.G, color.B, (byte)220);
+            
+            // Draw a small diamond shape (matching isometric style)
+            float halfSize = size / 2.0f;
+            
+            // Draw 4 lines forming a diamond
+            Vector2[] diamondPoints = new Vector2[]
+            {
+                position + new Vector2(0, -halfSize),      // Top
+                position + new Vector2(halfSize, 0),       // Right
+                position + new Vector2(0, halfSize),        // Bottom
+                position + new Vector2(-halfSize, 0)       // Left
+            };
+            
+            for (int i = 0; i < 4; i++)
+            {
+                int next = (i + 1) % 4;
+                DrawPathLine(spriteBatch, diamondPoints[i], diamondPoints[next], waypointColor);
+            }
+        }
+        
+        private void DrawClickEffect(SpriteBatch spriteBatch)
+        {
+            if (!_clickEffectPosition.HasValue)
+                return;
+
+            // Create texture if needed
+            if (_clickEffectTexture == null)
+            {
+                int size = 64;
+                _clickEffectTexture = new Texture2D(_graphicsDevice, size, size);
+                Color[] colorData = new Color[size * size];
+                
+                Vector2 center = new Vector2(size / 2.0f, size / 2.0f);
+                float radius = size / 2.0f;
+                
+                for (int x = 0; x < size; x++)
+                {
+                    for (int y = 0; y < size; y++)
+                    {
+                        float distance = Vector2.Distance(new Vector2(x, y), center);
+                        float normalizedDist = distance / radius;
+                        
+                        // Outer ring (pulsing effect)
+                        if (normalizedDist >= 0.7f && normalizedDist <= 1.0f)
+                        {
+                            float ringAlpha = 1.0f - (normalizedDist - 0.7f) / 0.3f;
+                            colorData[y * size + x] = new Color((byte)100, (byte)200, (byte)255, (byte)(ringAlpha * 200));
+                        }
+                        // Inner circle
+                        else if (normalizedDist <= 0.3f)
+                        {
+                            float innerAlpha = 1.0f - (normalizedDist / 0.3f);
+                            colorData[y * size + x] = new Color((byte)150, (byte)220, (byte)255, (byte)(innerAlpha * 150));
+                        }
+                        else
+                        {
+                            colorData[y * size + x] = Color.Transparent;
+                        }
+                    }
+                }
+                
+                _clickEffectTexture.SetData(colorData);
+            }
+
+            // Calculate fade based on timer
+            float fadeProgress = _clickEffectTimer / CLICK_EFFECT_DURATION;
+            float pulseScale = 1.0f + (1.0f - fadeProgress) * 0.5f; // Grows from 1.0 to 1.5
+            byte fadeAlpha = (byte)(fadeProgress * 255);
+            
+            Vector2 drawPos = _clickEffectPosition.Value - new Vector2(_clickEffectTexture.Width / 2.0f * pulseScale, _clickEffectTexture.Height / 2.0f * pulseScale);
+            Color tint = new Color((byte)255, (byte)255, (byte)255, fadeAlpha);
+            
+            spriteBatch.Draw(
+                _clickEffectTexture,
+                drawPos,
+                null,
+                tint,
+                0f,
+                Vector2.Zero,
+                pulseScale,
+                SpriteEffects.None,
+                0f
+            );
         }
     }
 }
