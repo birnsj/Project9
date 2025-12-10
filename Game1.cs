@@ -31,10 +31,12 @@ namespace Project9
         private bool _cameraFollowingPlayer = true;
         private bool _showGrid64x32 = false;
         private bool _showCollision = true; // Default to showing collision
+        private bool _isDraggingPlayer = false; // Track if we're dragging vs single click
+        private Vector2 _mouseClickStartPos; // Track where mouse was initially clicked
+        private const float DRAG_THRESHOLD = 10.0f; // Pixels mouse must move to be considered a drag
         private Texture2D? _gridLineTexture;
         private List<CollisionCellData> _collisionCells = new List<CollisionCellData>();
         private Dictionary<(int, int), List<CollisionCellData>> _collisionGrid = new Dictionary<(int, int), List<CollisionCellData>>();
-        private const float COLLISION_GRID_SIZE = 128.0f; // Spatial hash grid size for fast collision lookups
         private Texture2D? _collisionDiamondTexture;
 
         public Game1()
@@ -281,12 +283,20 @@ namespace Project9
             if (currentMouseState.LeftButton == ButtonState.Pressed && 
                 _previousMouseState.LeftButton == ButtonState.Released)
             {
+                Console.WriteLine($"[Game1] Mouse clicked at ({mouseWorldPos.X:F0}, {mouseWorldPos.Y:F0})");
+                
                 // Check if clicking on any enemy (within attack range)
                 float playerAttackRange = 80.0f; // pixels
                 bool attackedEnemy = false;
                 
                 foreach (var enemy in _enemies)
                 {
+                    // Skip enemies that are currently flashing (recently hit) to allow movement near them
+                    if (enemy.IsFlashing)
+                    {
+                        continue;
+                    }
+                    
                     Vector2 playerToEnemy = enemy.Position - _player.Position;
                     float distanceToEnemy = playerToEnemy.Length();
                     
@@ -297,16 +307,26 @@ namespace Project9
                     if (distanceToEnemy <= playerAttackRange || clickDistanceToEnemy <= 50.0f)
                     {
                         // Attack the enemy
+                        Console.WriteLine("[Game1] Attacked enemy");
                         enemy.TakeHit();
                         attackedEnemy = true;
+                        
+                        // Reset drag state when attacking to prevent navigation issues
+                        _isDraggingPlayer = false;
+                        _mouseClickStartPos = mouseWorldPos;
+                        
                         break; // Only attack one enemy per click
                     }
                 }
                 
                 if (!attackedEnemy)
                 {
-                    // Move to clicked position
-                    _player.SetTarget(mouseWorldPos, CheckCollision);
+                    // Single click - move to clicked position
+                    Console.WriteLine($"[Game1] Click to move at ({mouseWorldPos.X:F0}, {mouseWorldPos.Y:F0})");
+                    // Pass both collision checks: full collision for pathfinding, terrain-only for target validation
+                    _player.SetTarget(mouseWorldPos, CheckCollision, (pos) => CheckCollision(pos, false));
+                    _isDraggingPlayer = false; // Reset drag flag
+                    _mouseClickStartPos = mouseWorldPos; // Remember where we clicked
                 }
             }
 
@@ -315,19 +335,48 @@ namespace Project9
             if (currentMouseState.LeftButton == ButtonState.Pressed && 
                 _previousMouseState.LeftButton == ButtonState.Pressed)
             {
-                // Button is being held (not just clicked) - follow mouse
-                followPosition = mouseWorldPos;
+                // Check if mouse has moved significantly from initial click position
+                float mouseDragDistance = Vector2.Distance(mouseWorldPos, _mouseClickStartPos);
+                
+                if (mouseDragDistance > DRAG_THRESHOLD)
+                {
+                    // Mouse has moved - enter drag mode and follow cursor
+                    if (!_isDraggingPlayer)
+                    {
+                        Console.WriteLine("[Game1] Entered drag mode");
+                    }
+                    _isDraggingPlayer = true;
+                    followPosition = mouseWorldPos;
+                }
+                // Otherwise, keep the single-click target and don't follow
+            }
+            else if (currentMouseState.LeftButton == ButtonState.Released && 
+                     _previousMouseState.LeftButton == ButtonState.Pressed)
+            {
+                // Mouse button released - only clear target if we were dragging
+                if (_isDraggingPlayer)
+                {
+                    Console.WriteLine("[Game1] Drag ended - clearing target");
+                    _player.ClearTarget();
+                    _isDraggingPlayer = false;
+                }
+                else
+                {
+                    Console.WriteLine("[Game1] Click released (not dragging)");
+                }
             }
 
             // Update player movement with collision checking for pathfinding
             _player.Update(followPosition, deltaTime, (pos) => CheckCollision(pos), (from, to) => IsLineOfSightBlocked(from, to));
 
             // Update all enemies AI (chase and attack player) - pass sneaking state and collision check
+            // Note: CheckCollision now checks both terrain and enemy positions
             foreach (var enemy in _enemies)
             {
                 enemy.Update(_player.Position, deltaTime, _player.IsSneaking, (pos) => CheckCollision(pos), (from, to) => IsLineOfSightBlocked(from, to));
 
-                // Check if enemy hits player
+                // Check if enemy hits player (distance-based, separate from collision system)
+                // This allows entities to walk through each other while still attacking in range
                 Vector2 enemyToPlayer = _player.Position - enemy.Position;
                 float distanceToPlayer = enemyToPlayer.Length();
                 if (enemy.IsAttacking && distanceToPlayer <= enemy.AttackRange)
@@ -458,6 +507,9 @@ namespace Project9
 
         private void LoadCollisionCells()
         {
+            // Load collision data using synchronous I/O during content loading
+            // Note: This is called from LoadContent which is synchronous by MonoGame design
+            // For large collision files, consider implementing an async loading screen
             const string collisionPath = "Content/world/collision.json";
             string? resolvedPath = ResolveCollisionPath(collisionPath);
             
@@ -490,8 +542,8 @@ namespace Project9
             foreach (var cell in _collisionCells)
             {
                 // Calculate grid coordinates for this collision cell
-                int gridX = (int)(cell.X / COLLISION_GRID_SIZE);
-                int gridY = (int)(cell.Y / COLLISION_GRID_SIZE);
+                int gridX = (int)(cell.X / GameConfig.CollisionGridSize);
+                int gridY = (int)(cell.Y / GameConfig.CollisionGridSize);
                 
                 var key = (gridX, gridY);
                 if (!_collisionGrid.ContainsKey(key))
@@ -530,23 +582,41 @@ namespace Project9
 
         private bool CheckCollision(Vector2 position)
         {
-            const float halfWidth = 32.0f;  // 64/2 = 32
-            const float halfHeight = 16.0f; // 32/2 = 16
+            return CheckCollision(position, true); // Include enemies by default
+        }
 
+        private bool CheckCollision(Vector2 position, bool includeEnemies)
+        {
+            // Check collision with TERRAIN and optionally ENEMIES
             // Check center and 4 corners of the player diamond for collision
-            // This is more accurate than single point but not overly sensitive
             Vector2[] checkPoints = new Vector2[]
             {
                 position, // Center
-                new Vector2(position.X, position.Y - halfHeight), // Top
-                new Vector2(position.X + halfWidth, position.Y), // Right
-                new Vector2(position.X, position.Y + halfHeight), // Bottom
-                new Vector2(position.X - halfWidth, position.Y)  // Left
+                new Vector2(position.X, position.Y - GameConfig.CollisionCellHalfHeight), // Top
+                new Vector2(position.X + GameConfig.CollisionCellHalfWidth, position.Y), // Right
+                new Vector2(position.X, position.Y + GameConfig.CollisionCellHalfHeight), // Bottom
+                new Vector2(position.X - GameConfig.CollisionCellHalfWidth, position.Y)  // Left
             };
 
-            // Calculate grid region for the position
-            int gridX = (int)(position.X / COLLISION_GRID_SIZE);
-            int gridY = (int)(position.Y / COLLISION_GRID_SIZE);
+            // Check collision with enemies if requested
+            if (includeEnemies)
+            {
+                foreach (var enemy in _enemies)
+                {
+                    float distanceToEnemy = Vector2.Distance(position, enemy.Position);
+                    // Collision radius: use diamond half-width (32 pixels)
+                    float collisionRadius = GameConfig.CollisionCellHalfWidth;
+                    
+                    if (distanceToEnemy < collisionRadius)
+                    {
+                        return true; // Collision with enemy
+                    }
+                }
+            }
+            
+            // Check collision with terrain
+            int gridX = (int)(position.X / GameConfig.CollisionGridSize);
+            int gridY = (int)(position.Y / GameConfig.CollisionGridSize);
             
             // Check current grid cell and neighboring cells (to handle edge cases)
             for (int dx = -1; dx <= 1; dx++)
@@ -564,8 +634,8 @@ namespace Project9
                             {
                                 float cellDx = Math.Abs(checkPoint.X - cell.X);
                                 float cellDy = Math.Abs(checkPoint.Y - cell.Y);
-                                float normalizedX = cellDx / halfWidth;
-                                float normalizedY = cellDy / halfHeight;
+                                float normalizedX = cellDx / GameConfig.CollisionCellHalfWidth;
+                                float normalizedY = cellDy / GameConfig.CollisionCellHalfHeight;
                                 
                                 // Check if point is inside diamond: |x-cx|/hw + |y-cy|/hh <= 1
                                 // Use a small tolerance to prevent edge cases

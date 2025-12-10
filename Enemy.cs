@@ -46,8 +46,6 @@ namespace Project9
         private float _stuckTimer; // Timer to detect if enemy is stuck
         private int _preferredSlideDirection; // -1 for left, 1 for right, 0 for no preference
         private const float STUCK_THRESHOLD = 0.5f; // Seconds before considering stuck
-        private const float GRID_CELL_SIZE = 64.0f; // 64x32 grid cell size (matches Player and collision cells)
-        private const float GRID_CELL_HEIGHT = 32.0f;
 
         public Vector2 Position
         {
@@ -59,6 +57,7 @@ namespace Project9
         public float DetectionRange => _detectionRange;
         public bool IsAttacking => _isAttacking;
         public bool HasDetectedPlayer => _hasDetectedPlayer;
+        public bool IsFlashing => _isFlashing;
 
         public void TakeHit()
         {
@@ -71,12 +70,12 @@ namespace Project9
         {
             _position = startPosition;
             _originalPosition = startPosition; // Store original spawn position
-            _chaseSpeed = 100.0f; // pixels per second
-            _attackRange = 50.0f; // pixels - distance to trigger attack
-            _detectionRange = 200.0f; // pixels - how far enemy can detect player (aggro radius)
+            _chaseSpeed = GameConfig.EnemyChaseSpeed;
+            _attackRange = GameConfig.EnemyAttackRange;
+            _detectionRange = GameConfig.EnemyDetectionRange;
             _color = Color.DarkRed;
             _size = 32;
-            _attackCooldown = 1.0f; // seconds between attacks
+            _attackCooldown = GameConfig.EnemyAttackCooldown;
             _currentAttackCooldown = 0.0f;
             _isAttacking = false;
             _flashDuration = 0.5f; // Total flash duration in seconds
@@ -178,7 +177,7 @@ namespace Project9
             else
             {
                 // Not detected yet - sneak mode reduces detection range
-                effectiveDetectionRange = playerIsSneaking ? _detectionRange * 0.5f : _detectionRange;
+                effectiveDetectionRange = playerIsSneaking ? _detectionRange * GameConfig.EnemySneakDetectionMultiplier : _detectionRange;
             }
 
             // Check if player is within detection range
@@ -438,6 +437,15 @@ namespace Project9
                                     {
                                         // Can't move - stuck
                                         _stuckTimer += deltaTime;
+                                        
+                                        // If stuck for too long, force pathfinding recalculation
+                                        if (_stuckTimer > STUCK_THRESHOLD && checkCollision != null)
+                                        {
+                                            Console.WriteLine("[Enemy] Stuck for too long, recalculating path");
+                                            _path = FindPath(_position, chaseTarget, checkCollision);
+                                            _waypoint = null;
+                                            _stuckTimer = 0.0f;
+                                        }
                                     }
                                 }
                             }
@@ -617,6 +625,15 @@ namespace Project9
                         else
                         {
                             _stuckTimer += deltaTime;
+                            
+                            // If stuck for too long returning home, force pathfinding
+                            if (_stuckTimer > STUCK_THRESHOLD && checkCollision != null)
+                            {
+                                Console.WriteLine("[Enemy] Stuck returning home, recalculating path");
+                                _path = FindPath(_position, _originalPosition, checkCollision);
+                                _waypoint = null;
+                                _stuckTimer = 0.0f;
+                            }
                         }
                     }
                     
@@ -723,6 +740,14 @@ namespace Project9
                         else
                         {
                             _stuckTimer += deltaTime;
+                            
+                            // If stuck for too long patrolling, try pathfinding
+                            if (_stuckTimer > STUCK_THRESHOLD && checkCollision != null)
+                            {
+                                Console.WriteLine("[Enemy] Stuck patrolling, attempting pathfinding");
+                                _path = FindPath(_position, _originalPosition, checkCollision);
+                                _stuckTimer = 0.0f;
+                            }
                         }
                     }
                     
@@ -1103,12 +1128,12 @@ namespace Project9
         {
             List<Vector2> path = new List<Vector2>();
             
-            // Simple A* pathfinding on 64x32 grid (matches Player)
+            // Simple A* pathfinding (matches Player)
             // Convert positions to grid coordinates
-            int startGridX = (int)Math.Round(start.X / GRID_CELL_SIZE);
-            int startGridY = (int)Math.Round(start.Y / GRID_CELL_HEIGHT);
-            int endGridX = (int)Math.Round(end.X / GRID_CELL_SIZE);
-            int endGridY = (int)Math.Round(end.Y / GRID_CELL_HEIGHT);
+            int startGridX = (int)Math.Round(start.X / GameConfig.PathfindingGridCellWidth);
+            int startGridY = (int)Math.Round(start.Y / GameConfig.PathfindingGridCellHeight);
+            int endGridX = (int)Math.Round(end.X / GameConfig.PathfindingGridCellWidth);
+            int endGridY = (int)Math.Round(end.Y / GameConfig.PathfindingGridCellHeight);
             
             // If start and end are in the same or adjacent cells, just return direct path
             if (Math.Abs(startGridX - endGridX) <= 1 && Math.Abs(startGridY - endGridY) <= 1)
@@ -1118,7 +1143,7 @@ namespace Project9
             
             // If start and end are very close, just return direct path
             float directDistance = Vector2.Distance(start, end);
-            if (directDistance < GRID_CELL_SIZE * 2)
+            if (directDistance < GameConfig.PathfindingGridCellWidth * 2)
             {
                 // Check if direct path is clear
                 bool pathClear = true;
@@ -1155,12 +1180,11 @@ namespace Project9
             openSetLookup.Add(startNode);
             gScore[startNode] = 0;
             
-            // Limit search to reasonable area (max distance in pixels, then convert to grid cells)
-            float maxSearchDistance = 800.0f; // Max search distance in pixels
-            int maxSearchRadius = (int)(maxSearchDistance / GRID_CELL_SIZE);
+            // Limit search to reasonable area
+            int maxSearchRadius = (int)(GameConfig.PathfindingMaxSearchDistance / GameConfig.PathfindingGridCellWidth);
             
-            // Limit iterations to prevent performance issues (reduced for larger grid)
-            int maxIterations = 500; // Reduced since we're using larger cells
+            // Limit iterations to prevent performance issues
+            int maxIterations = GameConfig.PathfindingMaxIterations;
             int iterations = 0;
             
             while (openSet.Count > 0 && iterations < maxIterations)
@@ -1174,7 +1198,7 @@ namespace Project9
                 if (current.x == endNode.x && current.y == endNode.y)
                 {
                     // Reconstruct path using grid cell centers
-                    path = ReconstructPath(cameFrom, current, start, end, GRID_CELL_SIZE, GRID_CELL_HEIGHT);
+                    path = ReconstructPath(cameFrom, current, start, end, GameConfig.PathfindingGridCellWidth, GameConfig.PathfindingGridCellHeight);
                     break;
                 }
                 
@@ -1198,7 +1222,7 @@ namespace Project9
                             continue;
                         
                         // Check if neighbor grid cell is walkable (check center of cell)
-                        Vector2 neighborCellCenter = new Vector2(neighbor.x * GRID_CELL_SIZE, neighbor.y * GRID_CELL_HEIGHT);
+                        Vector2 neighborCellCenter = new Vector2(neighbor.x * GameConfig.PathfindingGridCellWidth, neighbor.y * GameConfig.PathfindingGridCellHeight);
                         if (checkCollision(neighborCellCenter))
                             continue;
                         

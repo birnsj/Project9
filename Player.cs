@@ -32,8 +32,6 @@ namespace Project9
         private float _stuckTimer; // Timer to detect if player is stuck
         private int _preferredSlideDirection; // -1 for left, 1 for right, 0 for no preference
         private const float STUCK_THRESHOLD = 0.5f; // Seconds before considering stuck
-        private const float GRID_CELL_SIZE = 64.0f; // 64x32 grid cell size (matches collision cells)
-        private const float GRID_CELL_HEIGHT = 32.0f;
 
         public Vector2 Position
         {
@@ -74,9 +72,9 @@ namespace Project9
         {
             _position = startPosition;
             _targetPosition = null;
-            _walkSpeed = 75.0f; // pixels per second
-            _runSpeed = 150.0f; // pixels per second
-            _sneakSpeed = _walkSpeed / 2.0f; // half of walk speed
+            _walkSpeed = GameConfig.PlayerWalkSpeed;
+            _runSpeed = GameConfig.PlayerRunSpeed;
+            _sneakSpeed = _walkSpeed * GameConfig.PlayerSneakSpeedMultiplier;
             _distanceThreshold = 100.0f; // pixels
             _currentSpeed = 0.0f;
             _normalColor = Color.Red;
@@ -95,8 +93,22 @@ namespace Project9
             _preferredSlideDirection = 0; // No preference initially
         }
 
-        public void SetTarget(Vector2 target, Func<Vector2, bool>? checkCollision = null)
+        public void SetTarget(Vector2 target, Func<Vector2, bool>? checkCollision = null, Func<Vector2, bool>? checkTerrainOnly = null)
         {
+            // Check if target location itself is blocked by TERRAIN collision only
+            // (Allow clicking near enemies for attack or movement)
+            if (checkTerrainOnly != null && checkTerrainOnly(target))
+            {
+                Console.WriteLine("[Player] Target location is blocked by terrain - click ignored");
+                return; // Don't set target if it's inside a wall
+            }
+            else if (checkCollision != null && checkTerrainOnly == null && checkCollision(target))
+            {
+                // Fallback if no terrain-only check provided
+                Console.WriteLine("[Player] Target location is blocked by collision - click ignored");
+                return;
+            }
+            
             _targetPosition = target;
             _waypoint = null; // Clear waypoint when setting new target
             _path?.Clear(); // Reuse existing list to avoid allocation
@@ -127,6 +139,10 @@ namespace Project9
                 if (!pathClear)
                 {
                     _path = FindPathUsingGridCells(_position, target, checkCollision);
+                    if (_path == null || _path.Count == 0)
+                    {
+                        Console.WriteLine("[Player] Pathfinding failed - no path found to target");
+                    }
                 }
                 // If path is clear, _path will remain empty and player will move directly
             }
@@ -229,26 +245,42 @@ namespace Project9
                     ? Vector2.Distance(_position, _targetPosition.Value) 
                     : distance;
 
-                // Determine speed based on sneak mode - always use full speed when moving
-                if (_isSneaking)
-                {
-                    // Sneak mode: always use sneak speed
-                    _currentSpeed = _sneakSpeed;
-                }
-                else
-                {
-                    // Normal mode: always use run speed when moving (no slowdown near target)
-                    _currentSpeed = _runSpeed;
-                }
-
-                // Move towards target
-                // Use smaller stop threshold for final target to improve accuracy
+                // Check if this is the final target (for smooth deceleration)
                 bool isFinalTarget = !followPosition.HasValue && 
                                     _targetPosition.HasValue && 
                                     (moveTarget == _targetPosition.Value || (_path != null && _path.Count == 0));
-                float stopThreshold = isFinalTarget ? 2.0f : (_isSneaking ? 10.0f : 5.0f);
+
+                // Determine speed with smooth deceleration near final target
+                float baseSpeed = _isSneaking ? _sneakSpeed : _runSpeed;
                 
-                if (distance > stopThreshold)
+                if (isFinalTarget && distanceToFinalTarget < GameConfig.PlayerSlowdownRadius)
+                {
+                    // Smooth deceleration - slow down proportionally as we approach target
+                    float slowdownFactor = distanceToFinalTarget / GameConfig.PlayerSlowdownRadius;
+                    // Ensure minimum speed to prevent getting stuck (20% of base speed)
+                    slowdownFactor = MathHelper.Max(slowdownFactor, 0.2f);
+                    _currentSpeed = baseSpeed * slowdownFactor;
+                }
+                else
+                {
+                    // Full speed when far from target or following cursor
+                    _currentSpeed = baseSpeed;
+                }
+
+                // Use precise stop threshold for final target
+                float stopThreshold = isFinalTarget ? GameConfig.PlayerStopThreshold : (_isSneaking ? 10.0f : 5.0f);
+                
+                // Check if we've reached the target
+                if (distance <= stopThreshold && isFinalTarget && _targetPosition.HasValue)
+                {
+                    // Reached target - snap immediately and stop all movement
+                    _position = _targetPosition.Value;
+                    _targetPosition = null;
+                    _waypoint = null;
+                    _path?.Clear();
+                    _currentSpeed = 0.0f;
+                }
+                else if (distance > stopThreshold)
                 {
                     direction.Normalize();
                     float moveDistance = _currentSpeed * deltaTime;
@@ -273,7 +305,7 @@ namespace Project9
                             float directDistance = directDirection.Length();
                             
                             // Only check if we're reasonably close to the target (within 3 grid cells)
-                            if (directDistance < GRID_CELL_SIZE * 3)
+                            if (directDistance < GameConfig.PathfindingGridCellWidth * 3)
                             {
                                 bool directPathClear = true;
                                 int samples = (int)(directDistance / 16.0f) + 1;
@@ -382,22 +414,14 @@ namespace Project9
                 }
                 else
                 {
-                    // Reached waypoint or target
+                    // Reached intermediate waypoint
                     if (_waypoint.HasValue && moveTarget == _waypoint.Value)
                     {
                         // Reached waypoint - clear it and continue to target
                         _waypoint = null;
                         _stuckTimer = 0.0f;
                     }
-                    else if (!followPosition.HasValue && _targetPosition.HasValue && moveTarget == _targetPosition.Value)
-                    {
-                        // Reached final target - snap to exact position for accuracy
-                        _position = moveTarget.Value;
-                        _targetPosition = null;
-                        _waypoint = null;
-                        _path?.Clear(); // Reuse existing list to avoid allocation
-                        _currentSpeed = 0.0f;
-                    }
+                    // Note: Final target stop is now handled above for smoother stopping
                 }
             }
             else
@@ -506,12 +530,12 @@ namespace Project9
             
             List<Vector2> path = new List<Vector2>();
             
-            // Convert positions to 64x32 grid cell coordinates
+            // Convert positions to grid cell coordinates
             // Grid cells are centered at their positions
-            int startGridX = (int)Math.Round(start.X / GRID_CELL_SIZE);
-            int startGridY = (int)Math.Round(start.Y / GRID_CELL_HEIGHT);
-            int endGridX = (int)Math.Round(end.X / GRID_CELL_SIZE);
-            int endGridY = (int)Math.Round(end.Y / GRID_CELL_HEIGHT);
+            int startGridX = (int)Math.Round(start.X / GameConfig.PathfindingGridCellWidth);
+            int startGridY = (int)Math.Round(start.Y / GameConfig.PathfindingGridCellHeight);
+            int endGridX = (int)Math.Round(end.X / GameConfig.PathfindingGridCellWidth);
+            int endGridY = (int)Math.Round(end.Y / GameConfig.PathfindingGridCellHeight);
             
             // If start and end are in the same or adjacent cells, just return direct path
             if (Math.Abs(startGridX - endGridX) <= 1 && Math.Abs(startGridY - endGridY) <= 1)
@@ -535,9 +559,8 @@ namespace Project9
             gScore[startNode] = 0;
             
             // Limit search to reasonable area
-            float maxSearchDistance = 800.0f;
-            int maxSearchRadius = (int)(maxSearchDistance / GRID_CELL_SIZE);
-            int maxIterations = 500; // Reduced since we're using larger cells
+            int maxSearchRadius = (int)(GameConfig.PathfindingMaxSearchDistance / GameConfig.PathfindingGridCellWidth);
+            int maxIterations = GameConfig.PathfindingMaxIterations;
             int iterations = 0;
             
             while (openSet.Count > 0 && iterations < maxIterations)
@@ -551,7 +574,7 @@ namespace Project9
                 if (current.x == endNode.x && current.y == endNode.y)
                 {
                     // Reconstruct path using grid cell centers
-                    path = ReconstructPath(cameFrom, current, start, end, GRID_CELL_SIZE, GRID_CELL_HEIGHT);
+                    path = ReconstructPath(cameFrom, current, start, end, GameConfig.PathfindingGridCellWidth, GameConfig.PathfindingGridCellHeight);
                     break;
                 }
                 
@@ -575,7 +598,7 @@ namespace Project9
                             continue;
                         
                         // Check if neighbor grid cell is walkable (check center of cell)
-                        Vector2 neighborCellCenter = new Vector2(neighbor.x * GRID_CELL_SIZE, neighbor.y * GRID_CELL_HEIGHT);
+                        Vector2 neighborCellCenter = new Vector2(neighbor.x * GameConfig.PathfindingGridCellWidth, neighbor.y * GameConfig.PathfindingGridCellHeight);
                         if (checkCollision(neighborCellCenter))
                             continue;
                         

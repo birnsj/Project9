@@ -80,8 +80,11 @@ namespace Project9
             {
                 try
                 {
-                    // Load map synchronously (MonoGame LoadContent is synchronous)
-                    var mapData = Task.Run(async () => await MapSerializer.LoadFromFileAsync(resolvedPath)).Result;
+                    // Load map data using synchronous I/O
+                    // Note: MonoGame's LoadContent is synchronous by design
+                    // For large files, consider implementing an async loading screen
+                    string json = File.ReadAllText(resolvedPath);
+                    var mapData = MapSerializer.Deserialize(json);
                     
                     if (mapData != null)
                     {
