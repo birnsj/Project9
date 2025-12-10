@@ -25,7 +25,7 @@ namespace Project9
         }
         
         private SpriteFont? _font;
-        private bool _isVisible = true; // Visible by default
+        private bool _isVisible = false; // Hidden by default - press L to toggle
         private static Texture2D? _whiteTexture;
         
         // Log message storage
@@ -43,8 +43,7 @@ namespace Project9
         {
             _font = font;
             _instance = this;
-            // Add a welcome message to show the log is working
-            AddMessage("Log overlay initialized - Press L to toggle", LogLevel.Info);
+            // Startup message removed - log overlay initialized silently
         }
         
         /// <summary>

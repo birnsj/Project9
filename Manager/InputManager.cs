@@ -17,6 +17,7 @@ namespace Project9
         ToggleGrid,
         ToggleCollision,
         ToggleCollisionSpheres,
+        TogglePath,
         ToggleDiagnostics,
         ResetDiagnostics,
         ToggleLog,
@@ -94,6 +95,11 @@ namespace Project9
                      !_previousKeyboardState.IsKeyDown(Keys.V))
             {
                 inputEvent = new InputEvent { Action = InputAction.ToggleCollisionSpheres };
+            }
+            else if (currentKeyboardState.IsKeyDown(Keys.P) && 
+                     !_previousKeyboardState.IsKeyDown(Keys.P))
+            {
+                inputEvent = new InputEvent { Action = InputAction.TogglePath };
             }
             else if (currentKeyboardState.IsKeyDown(Keys.F3) && 
                      !_previousKeyboardState.IsKeyDown(Keys.F3))

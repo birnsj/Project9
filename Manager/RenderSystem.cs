@@ -19,6 +19,7 @@ namespace Project9
         private bool _showGrid64x32 = false;
         private bool _showCollision = true;
         private bool _showCollisionSpheres = true; // Show collision spheres for entities
+        private bool _showPath = true; // Show path debug visualization
         private Texture2D? _gridLineTexture;
         private Texture2D? _collisionDiamondTexture;
         private Texture2D? _clickEffectTexture;
@@ -48,6 +49,12 @@ namespace Project9
         {
             get => _showCollisionSpheres;
             set => _showCollisionSpheres = value;
+        }
+        
+        public bool ShowPath
+        {
+            get => _showPath;
+            set => _showPath = value;
         }
         
         public int LastDrawCallCount => _lastDrawCallCount;
@@ -144,8 +151,8 @@ namespace Project9
             entityManager.Player.Draw(_spriteBatch);
             _lastDrawCallCount += _showCollisionSpheres ? 2 : 1;
             
-            // Draw debug path for player (only if not dragging/following cursor)
-            if (!entityManager.IsFollowingCursor)
+            // Draw debug path for player (only if not dragging/following cursor and path debug is enabled)
+            if (_showPath && !entityManager.IsFollowingCursor)
             {
                 DrawDebugPath(_spriteBatch, entityManager.Player);
             }

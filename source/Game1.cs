@@ -114,7 +114,7 @@ namespace Project9
             {
                 _diagnostics.Initialize(_uiFont);
                 _logOverlay.Initialize(_uiFont);
-                LogOverlay.Log("Game initialized - Log overlay ready", LogLevel.Info);
+                // Startup log removed - log overlay ready without message
             }
             else
             {
@@ -267,6 +267,11 @@ namespace Project9
                     case InputAction.ToggleCollisionSpheres:
                         _renderSystem.ShowCollisionSpheres = !_renderSystem.ShowCollisionSpheres;
                         Console.WriteLine($"[Game] Collision spheres: {(_renderSystem.ShowCollisionSpheres ? "ON" : "OFF")}");
+                        break;
+                    
+                    case InputAction.TogglePath:
+                        _renderSystem.ShowPath = !_renderSystem.ShowPath;
+                        Console.WriteLine($"[Game] Path debug: {(_renderSystem.ShowPath ? "ON" : "OFF")}");
                         break;
                     
                     case InputAction.ToggleDiagnostics:
