@@ -147,6 +147,41 @@ namespace Project9
         }
         
         /// <summary>
+        /// Check collision at position with only specific enemies (for combat scenarios)
+        /// This allows the player to move away from non-combat enemies while still checking collision with the enemy in combat
+        /// </summary>
+        public bool CheckCollision(Vector2 position, IEnumerable<Enemy>? specificEnemies, Vector2? excludePosition = null)
+        {
+            // Entity collision radius with buffer to keep away from walls
+            float effectiveRadius = GameConfig.EntityCollisionRadius + GameConfig.CollisionBuffer;
+            
+            // Check collision with specific enemies only
+            if (specificEnemies != null)
+            {
+                foreach (var enemy in specificEnemies)
+                {
+                    // Skip if this enemy's position matches the exclude position (entity checking its own position)
+                    if (excludePosition.HasValue && Vector2.DistanceSquared(enemy.Position, excludePosition.Value) < 1.0f)
+                    {
+                        continue;
+                    }
+                    
+                    // Sphere-sphere collision: distance < sum of radii
+                    float distanceBetweenCenters = Vector2.Distance(position, enemy.Position);
+                    float combinedRadius = effectiveRadius * 2; // Both have same radius
+                    
+                    if (distanceBetweenCenters < combinedRadius)
+                    {
+                        return true; // Sphere collision detected
+                    }
+                }
+            }
+            
+            // Check static terrain collision with cache
+            return CheckTerrainCollision(position, effectiveRadius);
+        }
+        
+        /// <summary>
         /// Check terrain collision with caching for static positions
         /// </summary>
         private bool CheckTerrainCollision(Vector2 position, float radius)
@@ -321,6 +356,57 @@ namespace Project9
         }
         
         /// <summary>
+        /// Perform swept collision detection with only specific enemies
+        /// </summary>
+        public Vector2 SweptCollisionCheck(Vector2 fromPos, Vector2 toPos, IEnumerable<Enemy>? specificEnemies, Vector2? excludePosition = null)
+        {
+            Vector2 direction = toPos - fromPos;
+            float distance = direction.Length();
+            
+            if (distance < 0.1f)
+                return toPos;
+            
+            direction.Normalize();
+            
+            // Check along the path with adaptive step size
+            float stepSize = 4.0f; // Smaller step = more accurate but slower
+            int steps = (int)(distance / stepSize) + 1;
+            
+            for (int i = 1; i <= steps; i++)
+            {
+                float t = (float)i / steps;
+                Vector2 testPos = fromPos + direction * (distance * t);
+                
+                if (CheckCollision(testPos, specificEnemies, excludePosition))
+                {
+                    // Found collision - binary search for exact collision point
+                    float minT = (float)(i - 1) / steps;
+                    float maxT = t;
+                    
+                    for (int j = 0; j < 4; j++) // 4 iterations of binary search
+                    {
+                        float midT = (minT + maxT) * 0.5f;
+                        Vector2 midPos = fromPos + direction * (distance * midT);
+                        
+                        if (CheckCollision(midPos, specificEnemies, excludePosition))
+                        {
+                            maxT = midT;
+                        }
+                        else
+                        {
+                            minT = midT;
+                        }
+                    }
+                    
+                    // Return the last safe position
+                    return fromPos + direction * (distance * minT);
+                }
+            }
+            
+            return toPos; // No collision detected
+        }
+        
+        /// <summary>
         /// Move with collision resolution - returns final position after sliding
         /// This is the main method entities should use for smooth movement
         /// </summary>
@@ -356,6 +442,85 @@ namespace Project9
                         // Push out slightly
                         Vector2 pushOut = currentPos + pushNormal * 2.0f;
                         if (!CheckCollision(pushOut, includeEnemies, excludePosition))
+                        {
+                            currentPos = pushOut;
+                            continue;
+                        }
+                    }
+                    
+                    // Still stuck - give up on this iteration
+                    break;
+                }
+                
+                // Move to hit position
+                currentPos = hitPos;
+                
+                // Calculate slide direction
+                Vector2 moveDir = remainingMovement;
+                moveDir.Normalize();
+                
+                Vector2 normal = GetCollisionNormal(currentPos, effectiveRadius);
+                if (normal.LengthSquared() < 0.01f)
+                {
+                    // No normal found - can't slide
+                    break;
+                }
+                
+                // Project remaining movement onto the surface (perpendicular to normal)
+                // This creates smooth sliding along walls
+                float dotProduct = Vector2.Dot(remainingMovement, normal);
+                Vector2 slideMovement = remainingMovement - normal * dotProduct;
+                
+                // Reduce slide movement slightly to prevent getting stuck in corners
+                slideMovement *= 0.95f;
+                
+                // Update remaining movement for next iteration
+                remainingMovement = slideMovement;
+                
+                // If slide movement is too small, stop
+                if (slideMovement.LengthSquared() < 0.1f)
+                    break;
+            }
+            
+            return currentPos;
+        }
+        
+        /// <summary>
+        /// Move with collision resolution using only specific enemies (for combat scenarios)
+        /// This allows the player to move away from non-combat enemies while still checking collision with the enemy in combat
+        /// </summary>
+        public Vector2 MoveWithCollision(Vector2 fromPos, Vector2 toPos, IEnumerable<Enemy>? specificEnemies, int maxIterations = 3, Vector2? excludePosition = null)
+        {
+            Vector2 currentPos = fromPos;
+            Vector2 remainingMovement = toPos - fromPos;
+            float effectiveRadius = GameConfig.EntityCollisionRadius + GameConfig.CollisionBuffer;
+            
+            for (int iteration = 0; iteration < maxIterations; iteration++)
+            {
+                if (remainingMovement.LengthSquared() < 0.01f)
+                    break;
+                
+                Vector2 targetPos = currentPos + remainingMovement;
+                
+                // Check if we can move directly
+                if (!CheckCollision(targetPos, specificEnemies, excludePosition))
+                {
+                    return targetPos;
+                }
+                
+                // Swept collision to find where we hit (using specific enemies)
+                Vector2 hitPos = SweptCollisionCheck(currentPos, targetPos, specificEnemies, excludePosition);
+                
+                // If we didn't move at all, try to get unstuck
+                if (Vector2.DistanceSquared(currentPos, hitPos) < 0.1f)
+                {
+                    // We're stuck - try to push out of collision
+                    Vector2 pushNormal = GetCollisionNormal(currentPos, effectiveRadius);
+                    if (pushNormal.LengthSquared() > 0.01f)
+                    {
+                        // Push out slightly
+                        Vector2 pushOut = currentPos + pushNormal * 2.0f;
+                        if (!CheckCollision(pushOut, specificEnemies, excludePosition))
                         {
                             currentPos = pushOut;
                             continue;

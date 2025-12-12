@@ -62,6 +62,33 @@ namespace Project9
         }
 
         /// <summary>
+        /// Get the enemy the player is currently in combat with (if any)
+        /// An enemy is considered "in combat" if it has detected the player and is within combat range
+        /// </summary>
+        private Enemy? GetEnemyInCombat()
+        {
+            const float combatRange = 200.0f; // Range within which enemy is considered "in combat"
+            
+            Enemy? closestCombatEnemy = null;
+            float closestDistance = float.MaxValue;
+            
+            foreach (var enemy in _enemies)
+            {
+                if (enemy.HasDetectedPlayer)
+                {
+                    float distanceToPlayer = Vector2.Distance(_player.Position, enemy.Position);
+                    if (distanceToPlayer <= combatRange && distanceToPlayer < closestDistance)
+                    {
+                        closestCombatEnemy = enemy;
+                        closestDistance = distanceToPlayer;
+                    }
+                }
+            }
+            
+            return closestCombatEnemy;
+        }
+
+        /// <summary>
         /// Update all entities
         /// </summary>
         public void Update(float deltaTime, Vector2? followPosition)
@@ -75,13 +102,34 @@ namespace Project9
             // Track if player is following cursor
             _isFollowingCursor = followPosition.HasValue;
             
+            // Determine which enemy the player is in combat with (if any)
+            Enemy? combatEnemy = GetEnemyInCombat();
+            
+            // Create collision check function that only checks the combat enemy (or no enemies if not in combat)
+            // This allows the player to move away from non-combat enemies without collision blocking
+            Func<Vector2, bool> playerCollisionCheck;
+            System.Collections.Generic.IEnumerable<Enemy>? combatEnemyList = null;
+            
+            if (combatEnemy != null)
+            {
+                // Only check collision with the enemy in combat
+                combatEnemyList = new List<Enemy> { combatEnemy };
+                playerCollisionCheck = (pos) => _collisionManager.CheckCollision(pos, combatEnemyList);
+            }
+            else
+            {
+                // Not in combat - only check terrain collision (no enemy collision)
+                playerCollisionCheck = (pos) => _collisionManager.CheckCollision(pos, false);
+            }
+            
             // Update player movement with CollisionManager for perfect collision resolution
             _player.Update(
                 followPosition, 
                 deltaTime, 
-                (pos) => _collisionManager.CheckCollision(pos), 
+                playerCollisionCheck, 
                 (from, to) => _collisionManager.IsLineOfSightBlocked(from, to),
-                _collisionManager
+                _collisionManager,
+                combatEnemyList
             );
             
             // Count active pathfinding
@@ -131,6 +179,24 @@ namespace Project9
             if (_collisionManager == null)
                 throw new InvalidOperationException("CollisionManager must be set before calling MovePlayerTo");
             
+            // Determine which enemy the player is in combat with (if any)
+            Enemy? combatEnemy = GetEnemyInCombat();
+            
+            // Create collision check function that only checks the combat enemy (or no enemies if not in combat)
+            // This allows the player to move away from non-combat enemies without collision blocking
+            Func<Vector2, bool> playerCollisionCheck;
+            if (combatEnemy != null)
+            {
+                // Only check collision with the enemy in combat
+                var combatEnemyList = new List<Enemy> { combatEnemy };
+                playerCollisionCheck = (pos) => _collisionManager.CheckCollision(pos, combatEnemyList);
+            }
+            else
+            {
+                // Not in combat - only check terrain collision (no enemy collision)
+                playerCollisionCheck = (pos) => _collisionManager.CheckCollision(pos, false);
+            }
+            
             // Check if enemies are blocking the path (they move, so timing matters)
             bool enemyNearTarget = false;
             foreach (var enemy in _enemies)
@@ -143,10 +209,10 @@ namespace Project9
                 }
             }
             
-            Console.WriteLine($"[EntityManager] Move player to ({target.X:F0}, {target.Y:F0}), EnemyNear={enemyNearTarget}");
+            Console.WriteLine($"[EntityManager] Move player to ({target.X:F0}, {target.Y:F0}), EnemyNear={enemyNearTarget}, CombatEnemy={(combatEnemy != null ? "Yes" : "No")}");
             _player.SetTarget(
                 target, 
-                (pos) => _collisionManager.CheckCollision(pos),
+                playerCollisionCheck,
                 (pos) => _collisionManager.CheckCollision(pos, false) // Terrain-only for target validation
             );
         }

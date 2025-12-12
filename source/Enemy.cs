@@ -193,6 +193,7 @@ namespace Project9
 
             bool pathClear = CheckDirectPath(target, checkCollision);
             
+            // Recalculate path if blocked or if path is empty/invalid
             if (!pathClear && (_path == null || _path.Count == 0) && checkCollision != null)
             {
                 _path = PathfindingService.FindPath(
@@ -204,7 +205,8 @@ namespace Project9
                 );
                 if (_path != null && _path.Count > 0)
                 {
-                    _path = PathfindingService.SimplifyPath(_path);
+                    // Use less aggressive simplification to keep waypoints needed for obstacles
+                    _path = PathfindingService.SimplifyPath(_path, 0.15f);
                 }
             }
             else if (pathClear)
@@ -242,7 +244,7 @@ namespace Project9
                     );
                     if (_path != null && _path.Count > 0)
                     {
-                        _path = PathfindingService.SimplifyPath(_path);
+                        _path = PathfindingService.SimplifyPath(_path, 0.15f);
                     }
                 }
                 else if (pathClear)
@@ -314,11 +316,16 @@ namespace Project9
             
             Vector2 direction = target - _position;
             float distance = direction.Length();
-            int samples = (int)(distance / 16.0f) + 1;
+            // Use denser sampling (every 8 pixels) like player to catch more obstacles
+            int samples = Math.Max(3, (int)(distance / 8.0f) + 1);
             
             for (int i = 0; i <= samples; i++)
             {
                 float t = (float)i / samples;
+                // Skip exact start and end to avoid checking current position
+                if (t < 0.001f || t > 0.999f)
+                    continue;
+                    
                 Vector2 samplePoint = _position + (target - _position) * t;
                 if (checkCollision(samplePoint))
                 {
@@ -375,7 +382,7 @@ namespace Project9
                                 );
                                 if (_path != null && _path.Count > 0)
                                 {
-                                    _path = PathfindingService.SimplifyPath(_path);
+                                    _path = PathfindingService.SimplifyPath(_path, 0.15f);
                                 }
                             }
                             _stuckTimer += deltaTime;
@@ -452,7 +459,7 @@ namespace Project9
                             );
                             if (_path != null && _path.Count > 0)
                             {
-                                _path = PathfindingService.SimplifyPath(_path);
+                                _path = PathfindingService.SimplifyPath(_path, 0.15f);
                             }
                             _stuckTimer = 0.0f;
                         }
@@ -487,7 +494,7 @@ namespace Project9
                             );
                             if (_path != null && _path.Count > 0)
                             {
-                                _path = PathfindingService.SimplifyPath(_path);
+                                _path = PathfindingService.SimplifyPath(_path, 0.15f);
                             }
                             _stuckTimer = 0.0f;
                         }

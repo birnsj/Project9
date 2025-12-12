@@ -370,13 +370,14 @@ namespace Project9
                 _pathLineTexture.SetData(new[] { Color.White });
             }
             
-            // If there's a pathfinding path, draw it
+            // If there's a pathfinding path, draw it (this means terrain is blocked)
+            // Pathfinding paths use cyan/yellow to indicate going around obstacles
             if (player.Path != null && player.Path.Count > 0)
             {
                 // Draw path from player position through all waypoints to target
                 Vector2? previousPoint = player.Position;
                 
-                // Draw lines connecting path waypoints
+                // Draw lines connecting path waypoints (cyan = going around obstacles)
                 foreach (var waypoint in player.Path)
                 {
                     if (previousPoint.HasValue)
@@ -404,11 +405,13 @@ namespace Project9
             }
             else
             {
-                // No pathfinding path - draw direct line to target
+                // No pathfinding path - terrain path is clear, draw direct line (green)
+                // Enemy collision will be handled during movement via sliding
                 // Only draw if target is far enough away to be meaningful
                 float distToTarget = Vector2.Distance(player.Position, player.TargetPosition.Value);
                 if (distToTarget > 5.0f)
                 {
+                    // Green = direct path, terrain is clear (enemies will be handled by collision sliding)
                     DrawPathLine(spriteBatch, player.Position, player.TargetPosition.Value, Color.Lime);
                     // Also draw target marker
                     DrawPathWaypoint(spriteBatch, player.TargetPosition.Value, Color.Lime, 8.0f);

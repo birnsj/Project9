@@ -84,56 +84,64 @@ namespace Project9
                 LogOverlay.Log("[Player] Target location is blocked by collision - will attempt to get as close as possible", LogLevel.Warning);
             }
             
-            // Check if direct path is clear (quick check first)
-            if (checkCollision != null)
-            {
-                Vector2 direction = target - _position;
-                float distance = direction.Length();
-                
-                // FIX Bug #3: Check if player's position is in collision, but don't force pathfinding
-                // Just log a warning - let the direct path check happen first
-                // This prevents unnecessary pathfinding when player is near obstacles
-                bool playerPosInCollision = checkCollision(_position);
-                if (playerPosInCollision)
+                // Check if direct path is clear (quick check first)
+                // IMPORTANT: Only check TERRAIN collision for direct path, not enemy collision
+                // Enemy collision will be handled during movement via MoveWithCollision sliding
+                // This allows direct paths (green) even when enemies are present - we'll slide around them
+                if (checkCollision != null)
                 {
-                    LogOverlay.Log($"[Player] NOTE: Player position ({_position.X:F1}, {_position.Y:F1}) is in collision zone - will check direct path anyway", LogLevel.Warning);
-                }
-                
-                // Skip direct path check if target itself is blocked by terrain
-                // (we'll need pathfinding anyway)
-                bool pathClear = !targetBlockedByTerrain;
-                
-                if (pathClear && distance > 0.1f)
-                {
-                    // More thorough direct path check with denser sampling
-                    // Check every 16 pixels for better obstacle detection
-                    int samples = Math.Max(2, (int)(distance / 16.0f) + 1); // Denser sampling
-                    LogOverlay.Log($"[Player] Checking direct path with {samples} samples over {distance:F1} pixels (player in collision: {playerPosInCollision})", LogLevel.Info);
+                    Vector2 direction = target - _position;
+                    float distance = direction.Length();
                     
-                    // FIX Bug #3: Don't force pathfinding just because player is in collision zone
-                    // Instead, let the direct path sampling detect if there's actually a blocked path
-                    // The player might just be passing through a collision buffer during normal movement
+                    // Use terrain-only check for direct path validation
+                    Func<Vector2, bool> terrainCheck = checkTerrainOnly ?? ((pos) => checkCollision(pos));
+                    
+                    // FIX Bug #3: Check if player's position is in collision, but don't force pathfinding
+                    // Just log a warning - let the direct path check happen first
+                    // This prevents unnecessary pathfinding when player is near obstacles
+                    bool playerPosInCollision = terrainCheck(_position);
+                    if (playerPosInCollision)
                     {
-                        // Check all points including start and end (but skip exact start/end positions)
-                        for (int i = 0; i <= samples; i++)
+                        LogOverlay.Log($"[Player] NOTE: Player position ({_position.X:F1}, {_position.Y:F1}) is in terrain collision zone - will check direct path anyway", LogLevel.Warning);
+                    }
+                    
+                    // Skip direct path check if target itself is blocked by terrain
+                    // (we'll need pathfinding anyway)
+                    bool pathClear = !targetBlockedByTerrain;
+                    
+                    if (pathClear && distance > 0.1f)
+                    {
+                        // More thorough direct path check with denser sampling
+                        // Check every 8 pixels for better obstacle detection (was 16, too sparse)
+                        // ONLY CHECK TERRAIN - enemies will be handled during movement
+                        int samples = Math.Max(3, (int)(distance / 8.0f) + 1); // Denser sampling - every 8 pixels
+                        LogOverlay.Log($"[Player] Checking direct TERRAIN path with {samples} samples over {distance:F1} pixels (player in collision: {playerPosInCollision})", LogLevel.Info);
+                        
+                        // FIX: Check terrain only for direct path - enemy collision handled during movement
+                        // This allows green direct paths even when enemies are in the way (we'll slide around them)
                         {
-                            float t = (float)i / samples;
-                            // Skip exact start (t=0) and exact end (t=1) as they're checked separately
-                            if (t < 0.01f || t > 0.99f)
-                                continue;
-                                
-                            Vector2 samplePoint = _position + (target - _position) * t;
-                            bool hasCollision = checkCollision(samplePoint);
-                            
-                            if (hasCollision)
+                            // Check all points along the path (including positions very close to start/end)
+                            for (int i = 0; i <= samples; i++)
                             {
-                                LogOverlay.Log($"[Player] Direct path BLOCKED at sample {i}/{samples} at ({samplePoint.X:F1}, {samplePoint.Y:F1})", LogLevel.Warning);
-                                pathClear = false;
-                                break;
+                                float t = (float)i / samples;
+                                // Include all points, even near start/end, but avoid exact positions
+                                if (t < 0.001f || t > 0.999f)
+                                    continue;
+                                
+                                Vector2 samplePoint = _position + (target - _position) * t;
+                                // Only check terrain collision for direct path decision
+                                // Enemy collision will be handled smoothly during movement
+                                bool hasTerrainCollision = terrainCheck(samplePoint);
+                                
+                                if (hasTerrainCollision)
+                                {
+                                    LogOverlay.Log($"[Player] Direct TERRAIN path BLOCKED at sample {i}/{samples} (t={t:F3}) at ({samplePoint.X:F1}, {samplePoint.Y:F1})", LogLevel.Warning);
+                                    pathClear = false;
+                                    break;
+                                }
                             }
                         }
                     }
-                }
                 
                 if (pathClear && !targetBlockedByTerrain)
                 {
@@ -145,14 +153,19 @@ namespace Project9
                 }
                 
                 // Use pathfinding if direct path is blocked OR if target is blocked by terrain
+                // Pathfinding should also use terrain-only collision to avoid going around enemies unnecessarily
+                // Enemy collision is handled during movement via MoveWithCollision sliding
                 if (!pathClear || targetBlockedByTerrain)
                 {
-                    LogOverlay.Log($"[Player] Starting pathfinding from ({_position.X:F1}, {_position.Y:F1}) to ({target.X:F1}, {target.Y:F1})", LogLevel.Info);
+                    LogOverlay.Log($"[Player] Starting pathfinding (terrain-only) from ({_position.X:F1}, {_position.Y:F1}) to ({target.X:F1}, {target.Y:F1})", LogLevel.Info);
+                    
+                    // Use terrain-only collision for pathfinding - enemies will be handled during movement
+                    Func<Vector2, bool> pathfindingCheck = checkTerrainOnly ?? ((pos) => checkCollision(pos));
                     
                     _path = PathfindingService.FindPath(
                         _position, 
                         target, 
-                        checkCollision,
+                        pathfindingCheck,
                         GameConfig.PathfindingGridCellWidth,
                         GameConfig.PathfindingGridCellHeight
                     );
@@ -167,11 +180,27 @@ namespace Project9
                     }
                     else
                     {
+                        LogOverlay.Log($"[Player] Pathfinding SUCCEEDED - {_path.Count} waypoints (before simplification)", LogLevel.Info);
+                        
                         // Smooth the path to remove unnecessary waypoints
-                        _path = PathfindingService.SimplifyPath(_path);
-                        if (_path != null)
+                        // But don't simplify too aggressively - we need waypoints to avoid obstacles
+                        _path = PathfindingService.SimplifyPath(_path, 0.15f); // Increased threshold to keep more waypoints
+                        
+                        if (_path != null && _path.Count > 0)
                         {
-                            LogOverlay.Log($"[Player] Pathfinding SUCCEEDED - {_path.Count} waypoints", LogLevel.Info);
+                            LogOverlay.Log($"[Player] Path simplified to {_path.Count} waypoints", LogLevel.Info);
+                        }
+                        else if (_path == null || _path.Count == 0)
+                        {
+                            LogOverlay.Log("[Player] WARNING: Path simplification removed all waypoints - using original path", LogLevel.Warning);
+                            // Restore original path if simplification removed everything
+                            _path = PathfindingService.FindPath(
+                                _position, 
+                                target, 
+                                pathfindingCheck,
+                                GameConfig.PathfindingGridCellWidth,
+                                GameConfig.PathfindingGridCellHeight
+                            );
                         }
                     }
                 }
@@ -196,7 +225,7 @@ namespace Project9
             Update(null, deltaTime, null, null);
         }
 
-        public void Update(Vector2? followPosition, float deltaTime, Func<Vector2, bool>? checkCollision = null, Func<Vector2, Vector2, bool>? checkLineOfSight = null, CollisionManager? collisionManager = null)
+        public void Update(Vector2? followPosition, float deltaTime, Func<Vector2, bool>? checkCollision = null, Func<Vector2, Vector2, bool>? checkLineOfSight = null, CollisionManager? collisionManager = null, System.Collections.Generic.IEnumerable<Enemy>? specificEnemies = null)
         {
             UpdateFlashing(deltaTime);
 
@@ -327,7 +356,20 @@ namespace Project9
                     if (collisionManager != null)
                     {
                         // Move with swept collision and sliding
-                        Vector2 newPos = collisionManager.MoveWithCollision(_position, nextPosition, true);
+                        // IMPORTANT: During combat, don't check enemy collision - allow player to move freely
+                        // Enemy collision would lock the player to the enemy, preventing disengagement
+                        // Terrain collision is still checked, and enemies will naturally slide/avoid during their movement
+                        Vector2 newPos;
+                        if (specificEnemies != null)
+                        {
+                            // During combat: Only check terrain collision, ignore enemy collision
+                            // This allows the player to move away from enemies freely
+                            newPos = collisionManager.MoveWithCollision(_position, nextPosition, false, 3, _position);
+                        }
+                        else
+                        {
+                            newPos = collisionManager.MoveWithCollision(_position, nextPosition, true);
+                        }
                         
                         // Accept any movement, even small ones, to prevent getting stuck when path exists
                         // This ensures the player continues moving along the path even with small movements
