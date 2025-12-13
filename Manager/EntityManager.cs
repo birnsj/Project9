@@ -186,7 +186,6 @@ namespace Project9
                 _activePathfindingCount++;
             }
 
-<<<<<<< HEAD
             // Update all cameras first (they can alert enemies)
             bool anyCameraDetecting = false;
             foreach (var camera in _cameras)
@@ -251,10 +250,7 @@ namespace Project9
                 }
             }
 
-            // Update all enemies
-=======
             // Update all enemies (keep dead ones but don't update them)
->>>>>>> 2ff0327 (Separate movement and attack collision - allow free movement during combat)
             foreach (var enemy in _enemies)
             {
                 // Only update alive enemies
@@ -279,12 +275,9 @@ namespace Project9
                     (pos) => _collisionManager.CheckCollision(pos, true, enemyCurrentPos), 
                     (from, to) => _collisionManager.IsLineOfSightBlocked(from, to, enemyCurrentPos),
                     _collisionManager,
-<<<<<<< HEAD
                     terrainOnlyCheck, // Pass terrain-only check for pathfinding
-                    _alarmActive
-=======
+                    _alarmActive,
                     _player.IsAlive // Pass player alive status
->>>>>>> 2ff0327 (Separate movement and attack collision - allow free movement during combat)
                 );
                 
                 // Count active pathfinding
@@ -323,53 +316,15 @@ namespace Project9
             if (_collisionManager == null)
                 throw new InvalidOperationException("CollisionManager must be set before calling MovePlayerTo");
             
-<<<<<<< HEAD
-            // Determine which enemy the player is in combat with (if any)
-            Enemy? combatEnemy = GetEnemyInCombat();
-            
-            // Create collision check function that only checks the combat enemy (or no enemies if not in combat)
-            // This allows the player to move away from non-combat enemies without collision blocking
-            Func<Vector2, bool> playerCollisionCheck;
-            if (combatEnemy != null)
-            {
-                // Only check collision with the enemy in combat
-                var combatEnemyList = new List<Enemy> { combatEnemy };
-                playerCollisionCheck = (pos) => _collisionManager.CheckCollision(pos, combatEnemyList);
-            }
-            else
-            {
-                // Not in combat - only check terrain collision (no enemy collision)
-                playerCollisionCheck = (pos) => _collisionManager.CheckCollision(pos, false);
-            }
-            
-            // Check if enemies are blocking the path (they move, so timing matters)
-            bool enemyNearTarget = false;
-            foreach (var enemy in _enemies)
-            {
-                float distToTarget = Vector2.Distance(enemy.Position, target);
-                if (distToTarget < GameConfig.EnemyNearTargetThreshold)
-                {
-                    enemyNearTarget = true;
-                    LogOverlay.Log($"[EntityManager] Enemy near target at ({enemy.Position.X:F1}, {enemy.Position.Y:F1}), dist={distToTarget:F1}px", LogLevel.Warning);
-                }
-            }
-            
-            Console.WriteLine($"[EntityManager] Move player to ({target.X:F0}, {target.Y:F0}), EnemyNear={enemyNearTarget}, CombatEnemy={(combatEnemy != null ? "Yes" : "No")}");
-            _player.SetTarget(
-                target, 
-                playerCollisionCheck,
-                (pos) => _collisionManager.CheckCollision(pos, false) // Terrain-only for target validation
-=======
             // CRITICAL: Always allow movement - never block it
             // In Diablo 2 style, player can always move, even when being attacked
-            // Don't check for enemies near target - player should be able to move anywhere
+            // Use movement-only collision (terrain only, no enemies)
             
             Console.WriteLine($"[EntityManager] Move player to ({target.X:F0}, {target.Y:F0})");
             _player.SetTarget(
                 target, 
                 (pos) => _collisionManager.CheckMovementCollision(pos), // Movement collision - terrain only, no enemies
                 (pos) => _collisionManager.CheckMovementCollision(pos) // Terrain-only for target validation
->>>>>>> 2ff0327 (Separate movement and attack collision - allow free movement during combat)
             );
         }
 

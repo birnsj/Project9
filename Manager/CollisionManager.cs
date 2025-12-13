@@ -386,7 +386,6 @@ namespace Project9
         }
         
         /// <summary>
-<<<<<<< HEAD
         /// Perform swept collision detection with only specific enemies
         /// </summary>
         public Vector2 SweptCollisionCheck(Vector2 fromPos, Vector2 toPos, IEnumerable<Enemy>? specificEnemies, Vector2? excludePosition = null)
@@ -435,14 +434,15 @@ namespace Project9
             }
             
             return toPos; // No collision detected
-=======
+        }
+        
+        /// <summary>
         /// Move with collision resolution for movement - ONLY terrain, NO enemies
         /// This allows entities to move freely even when next to other entities
         /// </summary>
         public Vector2 MoveWithCollisionMovement(Vector2 fromPos, Vector2 toPos, int maxIterations = 3)
         {
             return MoveWithCollision(fromPos, toPos, false, maxIterations, null);
->>>>>>> 2ff0327 (Separate movement and attack collision - allow free movement during combat)
         }
         
         /// <summary>

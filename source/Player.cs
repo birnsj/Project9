@@ -457,7 +457,6 @@ namespace Project9
                     // Use CollisionManager's advanced collision resolution if available
                     if (collisionManager != null)
                     {
-<<<<<<< HEAD
                         // Move with swept collision and sliding
                         // IMPORTANT: During combat, don't check enemy collision - allow player to move freely
                         // Enemy collision would lock the player to the enemy, preventing disengagement
@@ -471,12 +470,9 @@ namespace Project9
                         }
                         else
                         {
-                            newPos = collisionManager.MoveWithCollision(_position, nextPosition, true);
+                            // Move with swept collision and sliding - MOVEMENT ONLY (no enemy collision)
+                            newPos = collisionManager.MoveWithCollisionMovement(_position, nextPosition);
                         }
-=======
-                        // Move with swept collision and sliding - MOVEMENT ONLY (no enemy collision)
-                        Vector2 newPos = collisionManager.MoveWithCollisionMovement(_position, nextPosition);
->>>>>>> 2ff0327 (Separate movement and attack collision - allow free movement during combat)
                         
                         // Accept any movement, even small ones, to prevent getting stuck when path exists
                         // This ensures the player continues moving along the path even with small movements

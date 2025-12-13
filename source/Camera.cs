@@ -387,14 +387,5 @@ namespace Project9
             _sightConeTexture.SetData(colorData);
         }
         
-        /// <summary>
-        /// Convert world position to screen position
-        /// </summary>
-        public Vector2 WorldToScreen(Vector2 worldPosition)
-        {
-            // GetTransform() transforms from world to screen, so apply it directly
-            Matrix transform = GetTransform();
-            return Vector2.Transform(worldPosition, transform);
-        }
     }
 }

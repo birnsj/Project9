@@ -151,11 +151,7 @@ namespace Project9
         
         public bool IsDead => _isDead;
 
-<<<<<<< HEAD
-        public void Update(Vector2 playerPosition, float deltaTime, bool playerIsSneaking = false, Func<Vector2, bool>? checkCollision = null, Func<Vector2, Vector2, bool>? checkLineOfSight = null, CollisionManager? collisionManager = null, Func<Vector2, bool>? checkTerrainOnly = null, bool alarmActive = false)
-=======
-        public void Update(Vector2 playerPosition, float deltaTime, bool playerIsSneaking = false, Func<Vector2, bool>? checkCollision = null, Func<Vector2, Vector2, bool>? checkLineOfSight = null, CollisionManager? collisionManager = null, bool playerIsAlive = true)
->>>>>>> 2ff0327 (Separate movement and attack collision - allow free movement during combat)
+        public void Update(Vector2 playerPosition, float deltaTime, bool playerIsSneaking = false, Func<Vector2, bool>? checkCollision = null, Func<Vector2, Vector2, bool>? checkLineOfSight = null, CollisionManager? collisionManager = null, Func<Vector2, bool>? checkTerrainOnly = null, bool alarmActive = false, bool playerIsAlive = true)
         {
             UpdateFlashing(deltaTime);
 
