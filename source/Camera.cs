@@ -86,6 +86,15 @@ namespace Project9
             _alertCooldown = 2.0f; // Cooldown between alerts (seconds)
         }
         
+        /// <summary>
+        /// Initialize all textures for this camera (call during LoadContent, not Draw)
+        /// </summary>
+        public override void InitializeTextures(GraphicsDevice graphicsDevice)
+        {
+            base.InitializeTextures(graphicsDevice);
+            // Sight cone texture is created on-demand when needed
+        }
+        
         private bool IsPointInSightCone(Vector2 point)
         {
             Vector2 directionToPoint = point - _position;

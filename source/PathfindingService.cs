@@ -6,22 +6,17 @@ namespace Project9
 {
     /// <summary>
     /// Shared pathfinding service using A* algorithm with object pooling for performance.
-    /// Thread-safe: All methods that use shared static data structures are protected by locks.
-    /// Note: Current usage is single-threaded, but the design supports multi-threading.
+    /// Optimized for single-threaded usage (lock removed for better performance).
     /// </summary>
     public class PathfindingService
     {
         // Shared data structures to avoid allocations
-        // These are protected by _lock to ensure thread safety
+        // Since usage is single-threaded, no lock is needed
         private static readonly PriorityQueue<(int x, int y), float> _sharedOpenSet = new();
         private static readonly Dictionary<(int x, int y), float> _sharedGScore = new();
         private static readonly Dictionary<(int x, int y), float> _sharedFScore = new();
         private static readonly HashSet<(int x, int y)> _sharedClosedSet = new();
         private static readonly Dictionary<(int x, int y), (int x, int y)> _sharedCameFrom = new();
-        
-        // Thread safety lock for shared resources
-        // Protects all access to _sharedOpenSet, _sharedGScore, _sharedFScore, _sharedClosedSet, _sharedCameFrom
-        private static readonly object _lock = new object();
         
         /// <summary>
         /// Find path from start to end using A* algorithm with shared data structures
@@ -33,16 +28,14 @@ namespace Project9
             float gridCellWidth,
             float gridCellHeight)
         {
-            lock (_lock) // Ensure thread safety
-            {
-                // Log pathfinding attempt
-                LogOverlay.Log($"[Pathfinding] Attempting path from ({start.X:F1}, {start.Y:F1}) to ({end.X:F1}, {end.Y:F1})", LogLevel.Debug);
-                // Clear shared data structures
-                _sharedOpenSet.Clear();
-                _sharedGScore.Clear();
-                _sharedFScore.Clear();
-                _sharedClosedSet.Clear();
-                _sharedCameFrom.Clear();
+            // Log pathfinding attempt
+            LogOverlay.Log($"[Pathfinding] Attempting path from ({start.X:F1}, {start.Y:F1}) to ({end.X:F1}, {end.Y:F1})", LogLevel.Debug);
+            // Clear shared data structures
+            _sharedOpenSet.Clear();
+            _sharedGScore.Clear();
+            _sharedFScore.Clear();
+            _sharedClosedSet.Clear();
+            _sharedCameFrom.Clear();
                 
                 // Corner offset for collision checking (check corners to avoid clipping obstacles)
                 float cornerOffsetX = gridCellWidth * 0.4f;
@@ -282,7 +275,6 @@ namespace Project9
                 }
                 
                 return null;
-            }
         }
         
         /// <summary>

@@ -128,6 +128,17 @@ namespace Project9
                 Console.WriteLine("[Game] Warning: UI font not loaded - log overlay will not display");
             }
 
+            // Pre-create all entity textures (optimization: avoid creating textures during Draw)
+            player.InitializeTextures(GraphicsDevice);
+            foreach (var enemy in _entityManager.Enemies)
+            {
+                enemy.InitializeTextures(GraphicsDevice);
+            }
+            foreach (var camera in _entityManager.Cameras)
+            {
+                camera.InitializeTextures(GraphicsDevice);
+            }
+
             // Center camera on player
             Vector2 desiredCameraPos = player.Position - _screenCenter / _camera.Zoom;
             _camera.Position = desiredCameraPos;

@@ -121,6 +121,18 @@ namespace Project9
         }
 
         /// <summary>
+        /// Initialize all textures for this entity (call during LoadContent, not Draw)
+        /// </summary>
+        public virtual void InitializeTextures(GraphicsDevice graphicsDevice)
+        {
+            if (_diamondTexture == null)
+            {
+                CreateDiamondTexture(graphicsDevice);
+            }
+            // Collision sphere textures are created on-demand when needed for debug visualization
+        }
+
+        /// <summary>
         /// Create diamond texture for isometric rendering
         /// </summary>
         protected void CreateDiamondTexture(GraphicsDevice graphicsDevice)
@@ -264,6 +276,7 @@ namespace Project9
         /// </summary>
         public virtual void Draw(SpriteBatch spriteBatch)
         {
+            // Texture should be pre-created in InitializeTextures, but fallback for safety
             if (_diamondTexture == null)
             {
                 CreateDiamondTexture(spriteBatch.GraphicsDevice);

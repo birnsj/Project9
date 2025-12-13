@@ -107,19 +107,20 @@ namespace Project9
         private Enemy? GetEnemyInCombat()
         {
             const float combatRange = 200.0f; // Range within which enemy is considered "in combat"
+            const float combatRangeSquared = combatRange * combatRange; // Pre-calculate squared for comparison
             
             Enemy? closestCombatEnemy = null;
-            float closestDistance = float.MaxValue;
+            float closestDistanceSquared = float.MaxValue;
             
             foreach (var enemy in _enemies)
             {
                 if (enemy.HasDetectedPlayer)
                 {
-                    float distanceToPlayer = Vector2.Distance(_player.Position, enemy.Position);
-                    if (distanceToPlayer <= combatRange && distanceToPlayer < closestDistance)
+                    float distanceSquared = Vector2.DistanceSquared(_player.Position, enemy.Position);
+                    if (distanceSquared <= combatRangeSquared && distanceSquared < closestDistanceSquared)
                     {
                         closestCombatEnemy = enemy;
-                        closestDistance = distanceToPlayer;
+                        closestDistanceSquared = distanceSquared;
                     }
                 }
             }
@@ -137,6 +138,9 @@ namespace Project9
             
             _pathfindingStopwatch.Restart();
             _activePathfindingCount = 0;
+            
+            // Update enemy spatial hash grid for efficient collision detection
+            _collisionManager.UpdateEnemyGrid();
             
             // Track if player is following cursor
             _isFollowingCursor = followPosition.HasValue;
@@ -248,12 +252,13 @@ namespace Project9
                         {
                             // Check if enemy has direct line of sight to player
                             Vector2 directionToPlayer = _player.Position - enemy.Position;
-                            float distanceToPlayer = directionToPlayer.Length();
+                            float distanceSquared = directionToPlayer.LengthSquared();
                             float effectiveRange = _player.IsSneaking 
                                 ? enemy.DetectionRange * GameConfig.EnemySneakDetectionMultiplier 
                                 : enemy.DetectionRange;
+                            float effectiveRangeSquared = effectiveRange * effectiveRange;
                             
-                            bool inRange = distanceToPlayer <= effectiveRange;
+                            bool inRange = distanceSquared <= effectiveRangeSquared;
                             bool hasLineOfSight = inRange && !_collisionManager.IsLineOfSightBlocked(enemy.Position, _player.Position, enemy.Position);
                             
                             // If enemy doesn't have direct detection, reset their detection
@@ -306,8 +311,9 @@ namespace Project9
                 // Check if enemy hits player (only if player is alive)
                 if (_player.IsAlive)
                 {
-                    float distanceToPlayer = Vector2.Distance(_player.Position, enemy.Position);
-                    if (enemy.IsAttacking && distanceToPlayer <= enemy.AttackRange)
+                    float distanceSquared = Vector2.DistanceSquared(_player.Position, enemy.Position);
+                    float attackRangeSquared = enemy.AttackRange * enemy.AttackRange;
+                    if (enemy.IsAttacking && distanceSquared <= attackRangeSquared)
                     {
                         // Make enemy face the player when attacking
                         enemy.FaceTarget(_player.Position);

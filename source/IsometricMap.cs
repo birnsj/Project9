@@ -205,6 +205,53 @@ namespace Project9
                 tile.Draw(spriteBatch);
             }
         }
+        
+        /// <summary>
+        /// Draw tiles with frustum culling (optimized version)
+        /// </summary>
+        public void Draw(SpriteBatch spriteBatch, ViewportCamera camera, GraphicsDevice device)
+        {
+            // Calculate visible world bounds
+            Vector2 screenTopLeft = ScreenToWorld(Vector2.Zero, camera);
+            Vector2 screenBottomRight = ScreenToWorld(
+                new Vector2(device.Viewport.Width, device.Viewport.Height), camera);
+            
+            // Expand bounds with margin for safety (account for tile size and zoom)
+            float margin = IsometricTile.TileWidth * 2.0f / camera.Zoom;
+            float minX = screenTopLeft.X - margin;
+            float maxX = screenBottomRight.X + margin;
+            float minY = screenTopLeft.Y - margin;
+            float maxY = screenBottomRight.Y + margin;
+            
+            // Draw tiles in proper order (back to front)
+            // Tiles are pre-sorted once at load time since they're static
+            foreach (var tile in _tiles)
+            {
+                Vector2 tilePos = tile.GetScreenPosition();
+                
+                // Quick AABB culling check
+                // For isometric tiles, check if tile bounds intersect viewport
+                float tileWidth = IsometricTile.TileWidth;
+                float tileHeight = IsometricTile.TileHeight;
+                
+                // Check if tile is visible (with some margin for diagonal tiles)
+                if (tilePos.X + tileWidth >= minX && 
+                    tilePos.X - tileWidth <= maxX &&
+                    tilePos.Y + tileHeight >= minY && 
+                    tilePos.Y - tileHeight <= maxY)
+                {
+                    tile.Draw(spriteBatch);
+                }
+            }
+        }
+        
+        /// <summary>
+        /// Convert screen coordinates to world coordinates
+        /// </summary>
+        private Vector2 ScreenToWorld(Vector2 screenPosition, ViewportCamera camera)
+        {
+            return screenPosition / camera.Zoom + camera.Position;
+        }
 
         public Vector2 GetMapCenter()
         {

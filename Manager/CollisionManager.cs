@@ -15,9 +15,15 @@ namespace Project9
         private Dictionary<(int, int), List<CollisionCellData>> _collisionGrid = new Dictionary<(int, int), List<CollisionCellData>>();
         private List<Enemy> _enemies; // Reference to enemies for collision checking
         
+        // Spatial hash grid for enemy collision (optimization: only check nearby enemies)
+        private Dictionary<(int, int), List<Enemy>> _enemyGrid = new Dictionary<(int, int), List<Enemy>>();
+        private const float ENEMY_GRID_SIZE = 256.0f; // Grid cell size for enemy spatial hash
+        
         // Collision cache for static terrain (positions are rounded to grid cells)
-        private Dictionary<(int, int), bool> _staticCollisionCache = new Dictionary<(int, int), bool>();
+        // Using LRU cache to prevent unbounded memory growth
+        private LRUCache<(int, int), bool> _staticCollisionCache;
         private const float CACHE_GRID_SIZE = 16.0f; // Cache granularity
+        private const int MAX_CACHE_SIZE = 10000; // Maximum cache entries
         
         // Performance tracking
         private float _lastCollisionCheckTimeMs = 0.0f;
@@ -27,6 +33,7 @@ namespace Project9
         public CollisionManager(List<Enemy> enemies)
         {
             _enemies = enemies;
+            _staticCollisionCache = new LRUCache<(int, int), bool>(MAX_CACHE_SIZE);
         }
         
         /// <summary>
@@ -35,6 +42,34 @@ namespace Project9
         public void UpdateEnemies(List<Enemy> enemies)
         {
             _enemies = enemies;
+            UpdateEnemyGrid(); // Rebuild spatial hash when enemies change
+        }
+        
+        /// <summary>
+        /// Update spatial hash grid for enemy collision detection
+        /// Call this each frame to keep the grid current
+        /// </summary>
+        public void UpdateEnemyGrid()
+        {
+            _enemyGrid.Clear();
+            
+            foreach (var enemy in _enemies)
+            {
+                // Skip dead enemies - they don't block movement
+                if (!enemy.IsAlive)
+                    continue;
+                
+                // Calculate grid coordinates
+                int gridX = (int)(enemy.Position.X / ENEMY_GRID_SIZE);
+                int gridY = (int)(enemy.Position.Y / ENEMY_GRID_SIZE);
+                var key = (gridX, gridY);
+                
+                if (!_enemyGrid.ContainsKey(key))
+                {
+                    _enemyGrid[key] = new List<Enemy>();
+                }
+                _enemyGrid[key].Add(enemy);
+            }
         }
         
         public float LastCollisionCheckTimeMs => _lastCollisionCheckTimeMs;
@@ -121,29 +156,44 @@ namespace Project9
             float effectiveRadius = GameConfig.EntityCollisionRadius + GameConfig.CollisionBuffer;
             
             // Check collision with enemies if requested (sphere-sphere collision)
+            // Use spatial hash grid to only check nearby enemies
             if (includeEnemies)
             {
-                foreach (var enemy in _enemies)
+                // Calculate grid coordinates for position
+                int gridX = (int)(position.X / ENEMY_GRID_SIZE);
+                int gridY = (int)(position.Y / ENEMY_GRID_SIZE);
+                
+                // Check 3x3 grid around position (current cell + 8 neighbors)
+                for (int dx = -1; dx <= 1; dx++)
                 {
-                    // Skip dead enemies - they don't block movement
-                    if (!enemy.IsAlive)
+                    for (int dy = -1; dy <= 1; dy++)
                     {
-                        continue;
-                    }
-                    
-                    // Skip if this enemy's position matches the exclude position (entity checking its own position)
-                    if (excludePosition.HasValue && Vector2.DistanceSquared(enemy.Position, excludePosition.Value) < 1.0f)
-                    {
-                        continue;
-                    }
-                    
-                    // Sphere-sphere collision: distance < sum of radii
-                    float distanceBetweenCenters = Vector2.Distance(position, enemy.Position);
-                    float combinedRadius = effectiveRadius * 2; // Both have same radius
-                    
-                    if (distanceBetweenCenters < combinedRadius)
-                    {
-                        return true; // Sphere collision detected
+                        var key = (gridX + dx, gridY + dy);
+                        if (_enemyGrid.TryGetValue(key, out var enemiesInCell))
+                        {
+                            foreach (var enemy in enemiesInCell)
+                            {
+                                // Skip dead enemies - they don't block movement
+                                if (!enemy.IsAlive)
+                                    continue;
+                                
+                                // Skip if this enemy's position matches the exclude position (entity checking its own position)
+                                if (excludePosition.HasValue && Vector2.DistanceSquared(enemy.Position, excludePosition.Value) < 1.0f)
+                                {
+                                    continue;
+                                }
+                                
+                                // Sphere-sphere collision: distance < sum of radii (using squared for performance)
+                                float distanceSquared = Vector2.DistanceSquared(position, enemy.Position);
+                                float combinedRadius = effectiveRadius * 2; // Both have same radius
+                                float combinedRadiusSquared = combinedRadius * combinedRadius;
+                                
+                                if (distanceSquared < combinedRadiusSquared)
+                                {
+                                    return true; // Sphere collision detected
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -166,17 +216,22 @@ namespace Project9
             {
                 foreach (var enemy in specificEnemies)
                 {
+                    // Skip dead enemies - they don't block movement
+                    if (!enemy.IsAlive)
+                        continue;
+                    
                     // Skip if this enemy's position matches the exclude position (entity checking its own position)
                     if (excludePosition.HasValue && Vector2.DistanceSquared(enemy.Position, excludePosition.Value) < 1.0f)
                     {
                         continue;
                     }
                     
-                    // Sphere-sphere collision: distance < sum of radii
-                    float distanceBetweenCenters = Vector2.Distance(position, enemy.Position);
+                    // Sphere-sphere collision: distance < sum of radii (using squared for performance)
+                    float distanceSquared = Vector2.DistanceSquared(position, enemy.Position);
                     float combinedRadius = effectiveRadius * 2; // Both have same radius
+                    float combinedRadiusSquared = combinedRadius * combinedRadius;
                     
-                    if (distanceBetweenCenters < combinedRadius)
+                    if (distanceSquared < combinedRadiusSquared)
                     {
                         return true; // Sphere collision detected
                     }
@@ -662,7 +717,7 @@ namespace Project9
         /// </summary>
         public void ClearCollisionCache()
         {
-            _staticCollisionCache.Clear();
+            _staticCollisionCache?.Clear();
             _cacheHits = 0;
             _cacheMisses = 0;
             Console.WriteLine("[CollisionManager] Collision cache cleared");
@@ -700,5 +755,73 @@ namespace Project9
 
             return null;
         }
+    }
+    
+    /// <summary>
+    /// Simple LRU (Least Recently Used) cache implementation
+    /// Prevents unbounded memory growth by evicting least recently used entries
+    /// </summary>
+    internal class LRUCache<TKey, TValue> where TKey : notnull
+    {
+        private readonly Dictionary<TKey, LinkedListNode<(TKey key, TValue value)>> _dict;
+        private readonly LinkedList<(TKey key, TValue value)> _list;
+        private readonly int _capacity;
+        
+        public LRUCache(int capacity)
+        {
+            _capacity = capacity;
+            _dict = new Dictionary<TKey, LinkedListNode<(TKey key, TValue value)>>(capacity);
+            _list = new LinkedList<(TKey key, TValue value)>();
+        }
+        
+        public bool TryGetValue(TKey key, out TValue value)
+        {
+            if (_dict.TryGetValue(key, out var node))
+            {
+                // Move to front (most recently used)
+                _list.Remove(node);
+                _list.AddFirst(node);
+                value = node.Value.value;
+                return true;
+            }
+            value = default(TValue)!;
+            return false;
+        }
+        
+        public TValue this[TKey key]
+        {
+            set
+            {
+                if (_dict.TryGetValue(key, out var existingNode))
+                {
+                    // Update existing value and move to front
+                    existingNode.Value = (key, value);
+                    _list.Remove(existingNode);
+                    _list.AddFirst(existingNode);
+                }
+                else
+                {
+                    // Add new entry
+                    if (_dict.Count >= _capacity && _list.Last != null)
+                    {
+                        // Evict least recently used
+                        var last = _list.Last;
+                        _dict.Remove(last.Value.key);
+                        _list.RemoveLast();
+                    }
+                    
+                    var newNode = _list.AddFirst((key, value));
+                    _dict[key] = newNode;
+                }
+            }
+        }
+        
+        public void Clear()
+        {
+            _dict.Clear();
+            _list.Clear();
+        }
+        
+        public int Count => _dict.Count;
     }
 }

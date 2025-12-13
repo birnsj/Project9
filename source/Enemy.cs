@@ -117,6 +117,15 @@ namespace Project9
             _exclamationTimer = 0.0f;
         }
         
+        /// <summary>
+        /// Initialize all textures for this enemy (call during LoadContent, not Draw)
+        /// </summary>
+        public override void InitializeTextures(GraphicsDevice graphicsDevice)
+        {
+            base.InitializeTextures(graphicsDevice);
+            // Sight cone and exclamation textures are created on-demand when needed
+        }
+        
         private bool IsPointInSightCone(Vector2 point)
         {
             Vector2 directionToPoint = point - _position;
@@ -339,6 +348,9 @@ namespace Project9
             if (distanceToTarget <= _attackRange)
                 return;
 
+            // Face the player while chasing
+            FaceTarget(target);
+
             // Use terrain-only check for direct path validation (like player)
             Func<Vector2, bool> terrainCheck = checkTerrainOnly ?? ((pos) => checkCollision != null ? checkCollision(pos) : false);
             bool pathClear = CheckDirectPath(target, terrainCheck);
@@ -372,7 +384,7 @@ namespace Project9
             
             if (_path != null && _path.Count > 0)
             {
-                FollowPath(target, deltaTime, checkCollision, collisionManager, checkTerrainOnly);
+                FollowPath(target, deltaTime, checkCollision, collisionManager, checkTerrainOnly, faceFinalTarget: true);
             }
             else
             {
@@ -417,15 +429,12 @@ namespace Project9
                 
                 if (_path != null && _path.Count > 0)
                 {
-                    FollowPath(_originalPosition, deltaTime, checkCollision, collisionManager, checkTerrainOnly);
+                    FollowPath(_originalPosition, deltaTime, checkCollision, collisionManager, checkTerrainOnly, faceFinalTarget: false);
                 }
                 else
                 {
-                    MoveDirectly(_originalPosition, distanceToOriginal, deltaTime, checkCollision, collisionManager, checkTerrainOnly);
+                    MoveDirectly(_originalPosition, distanceToOriginal, deltaTime, checkCollision, collisionManager, checkTerrainOnly, faceTarget: false);
                 }
-                
-                directionToOriginal.Normalize();
-                _rotation = (float)Math.Atan2(directionToOriginal.Y, directionToOriginal.X);
             }
             else
             {
@@ -487,9 +496,7 @@ namespace Project9
             
             if (distanceToOriginal > 5.0f)
             {
-                MoveDirectly(_originalPosition, distanceToOriginal, deltaTime, checkCollision, collisionManager, checkTerrainOnly);
-                directionToOriginal.Normalize();
-                _rotation = (float)Math.Atan2(directionToOriginal.Y, directionToOriginal.X);
+                MoveDirectly(_originalPosition, distanceToOriginal, deltaTime, checkCollision, collisionManager, checkTerrainOnly, faceTarget: false);
             }
             else
             {
@@ -543,10 +550,16 @@ namespace Project9
             return true;
         }
 
-        private void FollowPath(Vector2 finalTarget, float deltaTime, Func<Vector2, bool>? checkCollision, CollisionManager? collisionManager, Func<Vector2, bool>? checkTerrainOnly = null)
+        private void FollowPath(Vector2 finalTarget, float deltaTime, Func<Vector2, bool>? checkCollision, CollisionManager? collisionManager, Func<Vector2, bool>? checkTerrainOnly = null, bool faceFinalTarget = false)
         {
             if (_path == null)
                 return;
+            
+            // Only face the final target (player) if alerted/chasing
+            if (faceFinalTarget)
+            {
+                FaceTarget(finalTarget);
+            }
             
             while (_path.Count > 0 && Vector2.Distance(_position, _path[0]) < 10.0f)
             {
@@ -562,6 +575,13 @@ namespace Project9
                 if (distance > 5.0f)
                 {
                     direction.Normalize();
+                    
+                    // If not facing final target, face the movement direction (waypoint)
+                    if (!faceFinalTarget)
+                    {
+                        _rotation = (float)Math.Atan2(direction.Y, direction.X);
+                    }
+                    
                     float moveDistance = _runSpeed * deltaTime;
                     if (moveDistance > distance) moveDistance = distance;
                     
@@ -634,10 +654,21 @@ namespace Project9
             }
         }
 
-        private void MoveDirectly(Vector2 target, float distanceToTarget, float deltaTime, Func<Vector2, bool>? checkCollision, CollisionManager? collisionManager, Func<Vector2, bool>? checkTerrainOnly = null)
+        private void MoveDirectly(Vector2 target, float distanceToTarget, float deltaTime, Func<Vector2, bool>? checkCollision, CollisionManager? collisionManager, Func<Vector2, bool>? checkTerrainOnly = null, bool faceTarget = true)
         {
             Vector2 direction = (target - _position);
             direction.Normalize();
+            
+            // Face the target while moving (only if faceTarget is true)
+            if (faceTarget)
+            {
+                FaceTarget(target);
+            }
+            else
+            {
+                // Face the direction of movement
+                _rotation = (float)Math.Atan2(direction.Y, direction.X);
+            }
             
             float moveDistance = _runSpeed * deltaTime;
             if (_isAttacking && distanceToTarget > _attackRange)

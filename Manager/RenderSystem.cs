@@ -137,7 +137,8 @@ namespace Project9
                 samplerState: SamplerState.PointClamp
             );
 
-            _map.Draw(_spriteBatch);
+            // Use frustum-culled version for better performance
+            _map.Draw(_spriteBatch, _camera, _graphicsDevice);
             _lastDrawCallCount++;
 
             // Draw click effect
@@ -153,17 +154,43 @@ namespace Project9
                 _lastDrawCallCount++;
             }
 
+            // Calculate visible bounds for frustum culling
+            Vector2 screenTopLeft = ScreenToWorld(Vector2.Zero);
+            Vector2 screenBottomRight = ScreenToWorld(new Vector2(
+                _graphicsDevice.Viewport.Width,
+                _graphicsDevice.Viewport.Height
+            ));
+            
+            // Expand bounds with margin for safety (account for entity size and zoom)
+            float margin = 200.0f / _camera.Zoom; // Larger margin when zoomed out
+            float minX = screenTopLeft.X - margin;
+            float maxX = screenBottomRight.X + margin;
+            float minY = screenTopLeft.Y - margin;
+            float maxY = screenBottomRight.Y + margin;
+
             // Draw cameras (before enemies so they appear behind)
             foreach (var camera in entityManager.Cameras)
             {
-                camera.DrawSightCone(_spriteBatch);
-                camera.Draw(_spriteBatch);
-                _lastDrawCallCount += 2; // Sight cone, sprite
+                // Frustum culling for cameras
+                if (camera.Position.X + 100 >= minX && camera.Position.X - 100 <= maxX &&
+                    camera.Position.Y + 100 >= minY && camera.Position.Y - 100 <= maxY)
+                {
+                    camera.DrawSightCone(_spriteBatch);
+                    camera.Draw(_spriteBatch);
+                    _lastDrawCallCount += 2; // Sight cone, sprite
+                }
             }
 
-            // Draw enemies
+            // Draw enemies with frustum culling
             foreach (var enemy in entityManager.Enemies)
             {
+                // Quick AABB culling check - skip enemies outside viewport
+                if (enemy.Position.X + 50 < minX || enemy.Position.X - 50 > maxX ||
+                    enemy.Position.Y + 50 < minY || enemy.Position.Y - 50 > maxY)
+                {
+                    continue; // Skip drawing this enemy
+                }
+                
                 // Draw blood splat under dead enemies first (so it appears below)
                 if (enemy.IsDead)
                 {
@@ -199,13 +226,14 @@ namespace Project9
                 // Draw health bar above enemy (only if alive and player is within detection range)
                 if (enemy.IsAlive)
                 {
-                    float distanceToPlayer = Vector2.Distance(entityManager.Player.Position, enemy.Position);
+                    float distanceSquared = Vector2.DistanceSquared(entityManager.Player.Position, enemy.Position);
                     float effectiveDetectionRange = enemy.HasDetectedPlayer 
                         ? enemy.DetectionRange 
                         : (entityManager.Player.IsSneaking ? enemy.DetectionRange * GameConfig.EnemySneakDetectionMultiplier : enemy.DetectionRange);
+                    float effectiveRangeSquared = effectiveDetectionRange * effectiveDetectionRange;
                     
                     // Only show health bar if player is within detection range
-                    if (distanceToPlayer <= effectiveDetectionRange)
+                    if (distanceSquared <= effectiveRangeSquared)
                     {
                         DrawEnemyHealthBar(_spriteBatch, enemy);
                     }
