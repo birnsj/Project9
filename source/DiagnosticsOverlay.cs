@@ -38,6 +38,15 @@ namespace Project9
         private int _gcGen1 = 0;
         private int _gcGen2 = 0;
         
+        // GC allocation tracking
+        private long _previousMemoryBytes = 0;
+        private int _previousGen0 = 0;
+        private int _previousGen1 = 0;
+        private int _previousGen2 = 0;
+        private long _allocationsThisFrame = 0;
+        private float _allocationRateMBps = 0.0f; // MB per second
+        private int _gcCollectionsThisFrame = 0;
+        
         // Entity counts
         private int _totalEntities = 0;
         private int _movingEntities = 0;
@@ -114,11 +123,53 @@ namespace Project9
             _cacheSize = cacheSize;
             _cacheHitRate = cacheHitRate;
             
-            // Update memory stats
-            _memoryUsageMB = GC.GetTotalMemory(false) / (1024 * 1024);
-            _gcGen0 = GC.CollectionCount(0);
-            _gcGen1 = GC.CollectionCount(1);
-            _gcGen2 = GC.CollectionCount(2);
+            // Update memory stats and track allocations
+            long currentMemoryBytes = GC.GetTotalMemory(false);
+            _memoryUsageMB = currentMemoryBytes / (1024 * 1024);
+            
+            int currentGen0 = GC.CollectionCount(0);
+            int currentGen1 = GC.CollectionCount(1);
+            int currentGen2 = GC.CollectionCount(2);
+            
+            // Calculate allocations this frame (only if no GC occurred)
+            _gcCollectionsThisFrame = (currentGen0 - _previousGen0) + (currentGen1 - _previousGen1) + (currentGen2 - _previousGen2);
+            
+            if (_gcCollectionsThisFrame == 0 && _previousMemoryBytes > 0)
+            {
+                // No GC occurred, so we can track allocations
+                _allocationsThisFrame = currentMemoryBytes - _previousMemoryBytes;
+                if (_allocationsThisFrame < 0) _allocationsThisFrame = 0; // Can't have negative allocations
+            }
+            else
+            {
+                // GC occurred, can't accurately track allocations
+                _allocationsThisFrame = 0;
+            }
+            
+            _gcGen0 = currentGen0;
+            _gcGen1 = currentGen1;
+            _gcGen2 = currentGen2;
+            
+            _previousMemoryBytes = currentMemoryBytes;
+            _previousGen0 = currentGen0;
+            _previousGen1 = currentGen1;
+            _previousGen2 = currentGen2;
+        }
+        
+        /// <summary>
+        /// Update allocation rate (call with deltaTime to calculate MB/s)
+        /// </summary>
+        public void UpdateAllocationRate(float deltaTime)
+        {
+            if (deltaTime > 0 && _allocationsThisFrame > 0)
+            {
+                float allocationsMB = _allocationsThisFrame / (1024.0f * 1024.0f);
+                _allocationRateMBps = allocationsMB / deltaTime;
+            }
+            else
+            {
+                _allocationRateMBps = 0.0f;
+            }
         }
         
         /// <summary>
@@ -220,7 +271,12 @@ namespace Project9
             // Memory Section
             DrawText(spriteBatch, "--- MEMORY ---", textPos, lineIndex++, Color.Cyan);
             DrawText(spriteBatch, $"Usage: {_memoryUsageMB} MB", textPos, lineIndex++, GetMemoryColor(_memoryUsageMB));
+            DrawText(spriteBatch, $"Alloc Rate: {_allocationRateMBps:F2} MB/s", textPos, lineIndex++, GetAllocationRateColor(_allocationRateMBps));
             DrawText(spriteBatch, $"GC: Gen0={_gcGen0} Gen1={_gcGen1} Gen2={_gcGen2}", textPos, lineIndex++, Color.White);
+            if (_gcCollectionsThisFrame > 0)
+            {
+                DrawText(spriteBatch, $"GC This Frame: {_gcCollectionsThisFrame}", textPos, lineIndex++, Color.Orange);
+            }
             lineIndex++; // Blank line
             
             // Instructions
@@ -290,6 +346,14 @@ namespace Project9
             if (hitRate >= 50) return Color.Yellow;
             if (hitRate >= 20) return Color.Orange;
             return Color.Red;
+        }
+        
+        private Color GetAllocationRateColor(float rateMBps)
+        {
+            if (rateMBps < 1.0f) return Color.LimeGreen; // < 1 MB/s is good
+            if (rateMBps < 5.0f) return Color.Yellow; // 1-5 MB/s is moderate
+            if (rateMBps < 10.0f) return Color.Orange; // 5-10 MB/s is high
+            return Color.Red; // > 10 MB/s is very high
         }
     }
 }

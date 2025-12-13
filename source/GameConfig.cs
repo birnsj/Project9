@@ -74,6 +74,77 @@ namespace Project9
         
         /// <summary>Collision buffer to keep entities away from walls (pixels)</summary>
         public const float CollisionBuffer = 6.0f;
+        
+        /// <summary>Enemy search duration when player goes out of view (seconds)</summary>
+        public const float EnemySearchDuration = 5.0f;
+        
+        /// <summary>Enemy search radius around last known player position (pixels)</summary>
+        public const float EnemySearchRadius = 200.0f;
+        
+        /// <summary>Maximum range enemy will chase player (pixels)</summary>
+        public const float EnemyMaxChaseRange = 1024.0f;
+        
+        /// <summary>Range within which enemy is considered "in combat" (pixels)</summary>
+        public const float EnemyCombatRange = 200.0f;
+        
+        /// <summary>Range within which enemies are updated each frame (pixels)</summary>
+        public const float EnemyUpdateRange = 500.0f;
+        
+        /// <summary>Enemy exclamation mark display duration (seconds)</summary>
+        public const float EnemyExclamationDuration = 1.0f;
+        
+        // ===== PATHFINDING CACHE =====
+        /// <summary>Pathfinding cache duration (seconds)</summary>
+        public const float PathfindingCacheDuration = 0.5f;
+        
+        /// <summary>Minimum interval between pathfinding requests for same path (seconds)</summary>
+        public const float PathfindingMinRequestInterval = 0.1f;
+        
+        /// <summary>Pathfinding cache cleanup interval (seconds)</summary>
+        public const float PathfindingCacheCleanupInterval = 5.0f;
+        
+        /// <summary>Maximum number of pooled paths</summary>
+        public const int PathfindingMaxPoolSize = 50;
+        
+        // ===== SPATIAL HASH =====
+        /// <summary>Enemy spatial hash grid cell size (pixels)</summary>
+        public const float EnemyGridSize = 256.0f;
+        
+        /// <summary>Collision cache grid granularity (pixels)</summary>
+        public const float CollisionCacheGridSize = 16.0f;
+        
+        // ===== RENDERING =====
+        /// <summary>Frustum culling margin for entities (pixels, divided by zoom)</summary>
+        public const float FrustumCullingMargin = 200.0f;
+        
+        /// <summary>Damage number lifetime (seconds)</summary>
+        public const float DamageNumberLifetime = 1.5f;
+        
+        /// <summary>Damage number vertical offset above entity (pixels)</summary>
+        public const float DamageNumberOffsetY = -50.0f;
+        
+        /// <summary>Click effect duration (seconds)</summary>
+        public const float ClickEffectDuration = 0.5f;
+        
+        /// <summary>Maximum number of damage numbers displayed simultaneously</summary>
+        public const int MaxDamageNumbers = 50;
+        
+        // ===== PLAYER RESPAWN =====
+        /// <summary>Player respawn countdown duration (seconds)</summary>
+        public const float PlayerRespawnCountdown = 10.0f;
+        
+        // ===== WAYPOINT THRESHOLDS =====
+        /// <summary>Distance threshold for removing waypoints (pixels)</summary>
+        public const float WaypointRemoveThreshold = 10.0f;
+        
+        /// <summary>Distance threshold for reaching waypoint (pixels)</summary>
+        public const float WaypointReachThreshold = 5.0f;
+        
+        /// <summary>Distance threshold for final target when sneaking (pixels)</summary>
+        public const float PlayerSneakStopThreshold = 10.0f;
+        
+        /// <summary>Distance threshold for final target when running (pixels)</summary>
+        public const float PlayerRunStopThreshold = 5.0f;
     }
 }
 

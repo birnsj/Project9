@@ -234,8 +234,9 @@ namespace Project9
 
             float deltaTime = (float)gameTime.ElapsedGameTime.TotalSeconds;
             
-            // Update FPS
+            // Update FPS and allocation rate
             _diagnostics.UpdateFPS(deltaTime);
+            _diagnostics.UpdateAllocationRate(deltaTime);
 
             // Process input - Myra Desktop input disabled to prevent click consumption
             _inputStopwatch.Restart();

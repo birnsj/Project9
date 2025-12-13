@@ -19,7 +19,7 @@ namespace Project9
             Position = position;
             Damage = damage;
             Timer = 0.0f;
-            Lifetime = 1.5f; // Display for 1.5 seconds
+            Lifetime = GameConfig.DamageNumberLifetime;
             // Random upward velocity with slight horizontal drift
             Velocity = new Vector2(
                 (float)(System.Random.Shared.NextDouble() * 20.0 - 10.0), // -10 to 10 horizontal

@@ -17,12 +17,10 @@ namespace Project9
         
         // Spatial hash grid for enemy collision (optimization: only check nearby enemies)
         private Dictionary<(int, int), List<Enemy>> _enemyGrid = new Dictionary<(int, int), List<Enemy>>();
-        private const float ENEMY_GRID_SIZE = 256.0f; // Grid cell size for enemy spatial hash
         
         // Collision cache for static terrain (positions are rounded to grid cells)
         // Using LRU cache to prevent unbounded memory growth
         private LRUCache<(int, int), bool> _staticCollisionCache;
-        private const float CACHE_GRID_SIZE = 16.0f; // Cache granularity
         private const int MAX_CACHE_SIZE = 10000; // Maximum cache entries
         
         // Performance tracking
@@ -60,8 +58,8 @@ namespace Project9
                     continue;
                 
                 // Calculate grid coordinates
-                int gridX = (int)(enemy.Position.X / ENEMY_GRID_SIZE);
-                int gridY = (int)(enemy.Position.Y / ENEMY_GRID_SIZE);
+                int gridX = (int)(enemy.Position.X / GameConfig.EnemyGridSize);
+                int gridY = (int)(enemy.Position.Y / GameConfig.EnemyGridSize);
                 var key = (gridX, gridY);
                 
                 if (!_enemyGrid.ContainsKey(key))
@@ -160,8 +158,8 @@ namespace Project9
             if (includeEnemies)
             {
                 // Calculate grid coordinates for position
-                int gridX = (int)(position.X / ENEMY_GRID_SIZE);
-                int gridY = (int)(position.Y / ENEMY_GRID_SIZE);
+                int gridX = (int)(position.X / GameConfig.EnemyGridSize);
+                int gridY = (int)(position.Y / GameConfig.EnemyGridSize);
                 
                 // Check 3x3 grid around position (current cell + 8 neighbors)
                 for (int dx = -1; dx <= 1; dx++)
@@ -272,8 +270,8 @@ namespace Project9
         private bool CheckTerrainCollision(Vector2 position, float radius)
         {
             // Round position to cache grid for lookup
-            int cacheX = (int)Math.Floor(position.X / CACHE_GRID_SIZE);
-            int cacheY = (int)Math.Floor(position.Y / CACHE_GRID_SIZE);
+            int cacheX = (int)Math.Floor(position.X / GameConfig.CollisionCacheGridSize);
+            int cacheY = (int)Math.Floor(position.Y / GameConfig.CollisionCacheGridSize);
             var cacheKey = (cacheX, cacheY);
             
             // Check cache first

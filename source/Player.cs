@@ -23,7 +23,6 @@ namespace Project9
         // Respawn system
         private Vector2 _spawnPosition;
         private float _respawnTimer = 0.0f;
-        private const float RESPAWN_COUNTDOWN = 10.0f; // 10 seconds
 
         public bool IsSneaking => _isSneaking;
         public bool IsDead => _isDead;
@@ -103,13 +102,15 @@ namespace Project9
             // This ensures clicks are never ignored - we'll try to get as close as possible
             // IMPORTANT: Completely reset all movement state to prevent progressive issues
             
-            // Log the current state before setting new target (to detect timing issues)
+            // Log the current state before setting new target (only in debug builds)
+            #if DEBUG
             string pathInfo = _path != null && _path.Count > 0 ? $"{_path.Count} waypoints" : "none";
             string movingState = _currentSpeed > 0.1f ? $"moving at {_currentSpeed:F1}px/s" : "stationary";
             string oldTargetInfo = _targetPosition.HasValue ? $"({_targetPosition.Value.X:F1}, {_targetPosition.Value.Y:F1})" : "none";
             
             LogOverlay.Log($"[Player] NEW TARGET SET - Old target: {oldTargetInfo}, Path: {pathInfo}, State: {movingState}", LogLevel.Info);
             LogOverlay.Log($"[Player] Current pos: ({_position.X:F1}, {_position.Y:F1}) -> New target: ({target.X:F1}, {target.Y:F1})", LogLevel.Info);
+            #endif
             
             // FIX: Always set target first, before any pathfinding calculations
             // This ensures the target is set even if pathfinding fails or takes time
@@ -129,11 +130,15 @@ namespace Project9
             
             if (targetBlockedByTerrain)
             {
+                #if DEBUG
                 LogOverlay.Log("[Player] Target location is blocked by terrain - will attempt to get as close as possible", LogLevel.Warning);
+                #endif
             }
             else if (targetBlockedByCollision && checkTerrainOnly == null)
             {
+                #if DEBUG
                 LogOverlay.Log("[Player] Target location is blocked by collision - will attempt to get as close as possible", LogLevel.Warning);
+                #endif
             }
             
                 // Check if direct path is clear (quick check first)
@@ -167,7 +172,9 @@ namespace Project9
                         // Check every 8 pixels for better obstacle detection (was 16, too sparse)
                         // ONLY CHECK TERRAIN - enemies will be handled during movement
                         int samples = Math.Max(3, (int)(distance / 8.0f) + 1); // Denser sampling - every 8 pixels
+                        #if DEBUG
                         LogOverlay.Log($"[Player] Checking direct TERRAIN path with {samples} samples over {distance:F1} pixels (player in collision: {playerPosInCollision})", LogLevel.Info);
+                        #endif
                         
                         // FIX: Check terrain only for direct path - enemy collision handled during movement
                         // This allows green direct paths even when enemies are in the way (we'll slide around them)
@@ -197,11 +204,15 @@ namespace Project9
                 
                 if (pathClear && !targetBlockedByTerrain)
                 {
+                    #if DEBUG
                     LogOverlay.Log("[Player] Direct path check PASSED - all samples clear", LogLevel.Info);
+                    #endif
                 }
                 else if (!pathClear)
                 {
+                    #if DEBUG
                     LogOverlay.Log("[Player] Direct path check FAILED - obstacle detected", LogLevel.Warning);
+                    #endif
                 }
                 
                 // Use pathfinding if direct path is blocked OR if target is blocked by terrain
@@ -209,7 +220,9 @@ namespace Project9
                 // Enemy collision is handled during movement via MoveWithCollision sliding
                 if (!pathClear || targetBlockedByTerrain)
                 {
+                    #if DEBUG
                     LogOverlay.Log($"[Player] Starting pathfinding (terrain-only) from ({_position.X:F1}, {_position.Y:F1}) to ({target.X:F1}, {target.Y:F1})", LogLevel.Info);
+                    #endif
                     
                     // Use terrain-only collision for pathfinding - enemies will be handled during movement
                     Func<Vector2, bool> pathfindingCheck = checkTerrainOnly ?? ((pos) => checkCollision(pos));
@@ -232,7 +245,9 @@ namespace Project9
                     }
                     else
                     {
+                        #if DEBUG
                         LogOverlay.Log($"[Player] Pathfinding SUCCEEDED - {_path.Count} waypoints (before simplification)", LogLevel.Info);
+                        #endif
                         
                         // Smooth the path to remove unnecessary waypoints
                         // But don't simplify too aggressively - we need waypoints to avoid obstacles
@@ -242,7 +257,9 @@ namespace Project9
                         
                         if (_path != null && _path.Count > 0)
                         {
+                            #if DEBUG
                             LogOverlay.Log($"[Player] Path simplified from {originalPath.Count} to {_path.Count} waypoints", LogLevel.Info);
+                            #endif
                         }
                         else
                         {
@@ -257,7 +274,9 @@ namespace Project9
                     // Direct path is clear - ensure path is cleared and stuck timer is reset
                     _path = null;
                     _stuckTimer = 0.0f;
+                    #if DEBUG
                     LogOverlay.Log($"[Player] Direct path clear - no pathfinding needed. Target: ({target.X:F1}, {target.Y:F1})", LogLevel.Info);
+                    #endif
                 }
             }
             else
@@ -274,7 +293,7 @@ namespace Project9
             if (!_isDead && !IsAlive)
             {
                 _isDead = true;
-                _respawnTimer = RESPAWN_COUNTDOWN; // Start countdown
+                _respawnTimer = GameConfig.PlayerRespawnCountdown; // Start countdown
                 ClearTarget(); // Stop movement when dead
             }
             
@@ -306,7 +325,7 @@ namespace Project9
             if (!_isDead && !IsAlive)
             {
                 _isDead = true;
-                _respawnTimer = RESPAWN_COUNTDOWN; // Start countdown
+                _respawnTimer = GameConfig.PlayerRespawnCountdown; // Start countdown
             }
             
             if (_isDead)
@@ -377,9 +396,11 @@ namespace Project9
                     while (_path.Count > 0)
                     {
                         float distToNext = Vector2.Distance(_position, _path[0]);
-                        if (distToNext < 10.0f)
+                        if (distToNext < GameConfig.WaypointRemoveThreshold)
                         {
+                            #if DEBUG
                             LogOverlay.Log($"[Player] Removing waypoint at ({_path[0].X:F1}, {_path[0].Y:F1}) - within 10px (dist={distToNext:F1})", LogLevel.Debug);
+                            #endif
                             _path.RemoveAt(0);
                         }
                         else
@@ -397,13 +418,13 @@ namespace Project9
                         moveTarget = _path[0];
                         // Ensure we have a valid target - if path waypoint is too close, use next one or target
                         float distToWaypoint = Vector2.Distance(_position, _path[0]);
-                        if (distToWaypoint < 5.0f && _path.Count > 1)
+                        if (distToWaypoint < GameConfig.WaypointReachThreshold && _path.Count > 1)
                         {
                             // Skip to next waypoint if current one is too close
                             _path.RemoveAt(0);
                             moveTarget = _path[0];
                         }
-                        else if (distToWaypoint < 5.0f && _path.Count == 1)
+                        else if (distToWaypoint < GameConfig.WaypointReachThreshold && _path.Count == 1)
                         {
                             // Last waypoint is too close, go directly to target
                             LogOverlay.Log($"[Player] Clearing path - last waypoint too close ({distToWaypoint:F1}px), going to target", LogLevel.Info);
@@ -449,7 +470,7 @@ namespace Project9
                     _currentSpeed = baseSpeed;
                 }
 
-                float stopThreshold = isFinalTarget ? GameConfig.PlayerStopThreshold : (_isSneaking ? 10.0f : 5.0f);
+                float stopThreshold = isFinalTarget ? GameConfig.PlayerStopThreshold : (_isSneaking ? GameConfig.PlayerSneakStopThreshold : GameConfig.PlayerRunStopThreshold);
                 
                 if (distance <= stopThreshold && isFinalTarget && _targetPosition.HasValue)
                 {

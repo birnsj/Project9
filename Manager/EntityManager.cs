@@ -106,7 +106,7 @@ namespace Project9
         /// </summary>
         private Enemy? GetEnemyInCombat()
         {
-            const float combatRange = 200.0f; // Range within which enemy is considered "in combat"
+            const float combatRange = GameConfig.EnemyCombatRange;
             const float combatRangeSquared = combatRange * combatRange; // Pre-calculate squared for comparison
             
             Enemy? closestCombatEnemy = null;
@@ -227,6 +227,10 @@ namespace Project9
                 }
             }
             
+            // Cache player position for distance calculations (avoid repeated property access)
+            Vector2 playerPosition = _player.Position;
+            bool playerIsSneaking = _player.IsSneaking;
+            
             // Handle alarm state
             if (anyCameraDetecting)
             {
@@ -272,7 +276,12 @@ namespace Project9
                 }
             }
 
-            // Update all enemies (keep dead ones but don't update them)
+            // Update enemies with range-based batching (only update nearby enemies)
+            // This significantly improves performance with many enemies
+            const float ENEMY_UPDATE_RANGE = GameConfig.EnemyUpdateRange;
+            const float ENEMY_UPDATE_RANGE_SQUARED = ENEMY_UPDATE_RANGE * ENEMY_UPDATE_RANGE;
+            
+            // Update all enemies (with range-based optimization)
             foreach (var enemy in _enemies)
             {
                 // Only update alive enemies
@@ -283,6 +292,16 @@ namespace Project9
                     continue;
                 }
                 
+                // Skip updating distant idle enemies (unless they've detected the player)
+                if (!enemy.HasDetectedPlayer)
+                {
+                    float distanceSquared = Vector2.DistanceSquared(playerPosition, enemy.Position);
+                    if (distanceSquared > ENEMY_UPDATE_RANGE_SQUARED)
+                    {
+                        continue; // Skip updating this enemy - too far away
+                    }
+                }
+                
                 // Capture enemy position for collision checking (to exclude self from collision)
                 Vector2 enemyCurrentPos = enemy.Position;
                 
@@ -291,9 +310,9 @@ namespace Project9
                 Func<Vector2, bool> terrainOnlyCheck = (pos) => _collisionManager.CheckCollision(pos, false);
                 
                 enemy.Update(
-                    _player.Position, 
+                    playerPosition, // Use cached position
                     deltaTime, 
-                    _player.IsSneaking, 
+                    playerIsSneaking, // Use cached sneaking state
                     (pos) => _collisionManager.CheckCollision(pos, true, enemyCurrentPos), 
                     (from, to) => _collisionManager.IsLineOfSightBlocked(from, to, enemyCurrentPos),
                     _collisionManager,
@@ -311,20 +330,22 @@ namespace Project9
                 // Check if enemy hits player (only if player is alive)
                 if (_player.IsAlive)
                 {
-                    float distanceSquared = Vector2.DistanceSquared(_player.Position, enemy.Position);
+                    float distanceSquared = Vector2.DistanceSquared(playerPosition, enemy.Position); // Use cached position
                     float attackRangeSquared = enemy.AttackRange * enemy.AttackRange;
                     if (enemy.IsAttacking && distanceSquared <= attackRangeSquared)
                     {
                         // Make enemy face the player when attacking
-                        enemy.FaceTarget(_player.Position);
+                        enemy.FaceTarget(playerPosition); // Use cached position
                         
                         _player.TakeDamage(GameConfig.EnemyAttackDamage);
                         if (_renderSystem != null)
                         {
-                            _renderSystem.ShowDamageNumber(_player.Position, GameConfig.EnemyAttackDamage);
+                            _renderSystem.ShowDamageNumber(playerPosition, GameConfig.EnemyAttackDamage); // Use cached position
                             _damageNumberCallCount++;
                         }
+                        #if DEBUG
                         LogOverlay.Log($"[EntityManager] Player took {GameConfig.EnemyAttackDamage} damage! Health: {_player.CurrentHealth:F1}/{_player.MaxHealth:F1}", LogLevel.Warning);
+                        #endif
                         break; // Only take one hit per frame
                     }
                 }

@@ -18,8 +18,78 @@ namespace Project9
         private static readonly HashSet<(int x, int y)> _sharedClosedSet = new();
         private static readonly Dictionary<(int x, int y), (int x, int y)> _sharedCameFrom = new();
         
+        // Object pool for path lists to reduce GC allocations
+        private static readonly Stack<List<Vector2>> _pathPool = new Stack<List<Vector2>>();
+        
+        // Pathfinding cache to avoid recalculating same paths
+        private static readonly Dictionary<(int, int, int, int), (List<Vector2>? path, float timestamp)> _pathCache = new();
+        private static float _lastCacheCleanup = 0.0f;
+        
+        /// <summary>
+        /// Rent a path list from the pool (or create new if pool is empty)
+        /// </summary>
+        private static List<Vector2> RentPath()
+        {
+            if (_pathPool.Count > 0)
+            {
+                var path = _pathPool.Pop();
+                path.Clear();
+                return path;
+            }
+            return new List<Vector2>();
+        }
+        
+        /// <summary>
+        /// Return a path list to the pool for reuse
+        /// </summary>
+        public static void ReturnPath(List<Vector2>? path)
+        {
+            if (path != null && _pathPool.Count < GameConfig.PathfindingMaxPoolSize)
+            {
+                path.Clear();
+                _pathPool.Push(path);
+            }
+        }
+        
+        /// <summary>
+        /// Round vector to grid for cache key
+        /// </summary>
+        private static (int, int) RoundToGrid(Vector2 pos, float gridSize)
+        {
+            return ((int)(pos.X / gridSize), (int)(pos.Y / gridSize));
+        }
+        
+        /// <summary>
+        /// Clean old cache entries
+        /// </summary>
+        private static void CleanPathCache(float currentTime)
+        {
+            if (currentTime - _lastCacheCleanup < GameConfig.PathfindingCacheCleanupInterval)
+                return;
+            
+            _lastCacheCleanup = currentTime;
+            
+            var keysToRemove = new List<(int, int, int, int)>();
+            foreach (var kvp in _pathCache)
+            {
+                if (currentTime - kvp.Value.timestamp > GameConfig.PathfindingCacheDuration * 2)
+                {
+                    keysToRemove.Add(kvp.Key);
+                    // Return cached path to pool if it exists
+                    if (kvp.Value.path != null)
+                        ReturnPath(kvp.Value.path);
+                }
+            }
+            
+            foreach (var key in keysToRemove)
+            {
+                _pathCache.Remove(key);
+            }
+        }
+        
         /// <summary>
         /// Find path from start to end using A* algorithm with shared data structures
+        /// Includes object pooling and caching for performance
         /// </summary>
         public static List<Vector2>? FindPath(
             Vector2 start, 
@@ -28,8 +98,52 @@ namespace Project9
             float gridCellWidth,
             float gridCellHeight)
         {
-            // Log pathfinding attempt
+            // Check cache first (round to grid for cache key)
+            float currentTime = (float)System.Diagnostics.Stopwatch.GetTimestamp() / System.Diagnostics.Stopwatch.Frequency;
+            var cacheKey = (
+                RoundToGrid(start, gridCellWidth).Item1,
+                RoundToGrid(start, gridCellWidth).Item2,
+                RoundToGrid(end, gridCellWidth).Item1,
+                RoundToGrid(end, gridCellWidth).Item2
+            );
+            
+            // Check cache
+            if (_pathCache.TryGetValue(cacheKey, out var cached))
+            {
+                // Return cached path if still valid
+                if (currentTime - cached.timestamp < GameConfig.PathfindingCacheDuration)
+                {
+                    // Return a copy from pool (don't return the cached one)
+                    if (cached.path != null && cached.path.Count > 0)
+                    {
+                        var cachedPath = RentPath();
+                        cachedPath.AddRange(cached.path);
+                        return cachedPath;
+                    }
+                    return null;
+                }
+                
+                // Throttle: don't recalculate too frequently
+                if (currentTime - cached.timestamp < GameConfig.PathfindingMinRequestInterval)
+                {
+                    // Return stale cached path
+                    if (cached.path != null && cached.path.Count > 0)
+                    {
+                        var stalePath = RentPath();
+                        stalePath.AddRange(cached.path);
+                        return stalePath;
+                    }
+                    return null;
+                }
+            }
+            
+            // Clean cache periodically
+            CleanPathCache(currentTime);
+            
+            // Log pathfinding attempt (only in debug builds to reduce overhead)
+            #if DEBUG
             LogOverlay.Log($"[Pathfinding] Attempting path from ({start.X:F1}, {start.Y:F1}) to ({end.X:F1}, {end.Y:F1})", LogLevel.Debug);
+            #endif
             // Clear shared data structures
             _sharedOpenSet.Clear();
             _sharedGScore.Clear();
@@ -205,7 +319,15 @@ namespace Project9
                     if (current == endCell)
                     {
                         var path = ReconstructPath(_sharedCameFrom, current, start, end, gridCellWidth, gridCellHeight);
+                        #if DEBUG
                         LogOverlay.Log($"[Pathfinding] Path found successfully in {iterations} iterations, {path.Count} waypoints", LogLevel.Debug);
+                        #endif
+                        
+                        // Cache the path
+                        var pathCopy = RentPath();
+                        pathCopy.AddRange(path);
+                        _pathCache[cacheKey] = (pathCopy, currentTime);
+                        
                         return path;
                     }
                     
@@ -274,18 +396,20 @@ namespace Project9
                     LogOverlay.Log($"[Pathfinding] Explored {iterations} cells before giving up", LogLevel.Debug);
                 }
                 
+                // Cache null result (no path found) to avoid repeated failed attempts
+                _pathCache[cacheKey] = (null, currentTime);
                 return null;
         }
         
         /// <summary>
-        /// Smooth path by removing unnecessary waypoints
+        /// Smooth path by removing unnecessary waypoints (uses pooled list)
         /// </summary>
         public static List<Vector2>? SmoothPath(List<Vector2>? path, Func<Vector2, Vector2, bool>? checkLineOfSight = null)
         {
             if (path == null || path.Count <= 2)
                 return path;
             
-            List<Vector2> smoothedPath = new List<Vector2>();
+            List<Vector2> smoothedPath = RentPath(); // Use pooled list
             smoothedPath.Add(path[0]); // Always keep start
             
             int currentIndex = 0;
@@ -325,14 +449,14 @@ namespace Project9
         }
         
         /// <summary>
-        /// Simplify path by removing collinear points
+        /// Simplify path by removing collinear points (uses pooled list)
         /// </summary>
         public static List<Vector2>? SimplifyPath(List<Vector2>? path, float threshold = 0.1f)
         {
             if (path == null || path.Count <= 2)
                 return path;
             
-            List<Vector2> simplified = new List<Vector2>();
+            List<Vector2> simplified = RentPath(); // Use pooled list
             simplified.Add(path[0]); // Always keep start
             
             for (int i = 1; i < path.Count - 1; i++)
@@ -370,7 +494,7 @@ namespace Project9
         }
         
         /// <summary>
-        /// Reconstruct path from A* results
+        /// Reconstruct path from A* results (uses pooled list)
         /// </summary>
         private static List<Vector2> ReconstructPath(
             Dictionary<(int x, int y), (int x, int y)> cameFrom,
@@ -380,7 +504,7 @@ namespace Project9
             float gridCellWidth,
             float gridCellHeight)
         {
-            List<Vector2> path = new List<Vector2>();
+            List<Vector2> path = RentPath(); // Use pooled list
             
             // Walk backwards through the path
             while (cameFrom.ContainsKey(current))

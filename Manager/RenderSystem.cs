@@ -17,7 +17,7 @@ namespace Project9
         private ViewportCamera _camera;
         private SpriteFont? _uiFont;
         
-        private bool _showGrid64x32 = false;
+        private bool _showGrid64x32 = true;
         private bool _showCollision = true;
         private bool _showCollisionSpheres = true; // Show collision spheres for entities
         private bool _showPath = false; // Show path debug visualization
@@ -32,10 +32,10 @@ namespace Project9
         // Click effect
         private Vector2? _clickEffectPosition;
         private float _clickEffectTimer = 0.0f;
-        private const float CLICK_EFFECT_DURATION = 0.5f;
         
-        // Damage numbers
-        private List<DamageNumber> _damageNumbers = new List<DamageNumber>();
+        // Damage numbers (using array for better performance, no allocations)
+        private DamageNumber[] _damageNumbers = new DamageNumber[GameConfig.MaxDamageNumbers];
+        private int _damageNumberCount = 0;
         
         // Performance tracking
         private int _lastDrawCallCount = 0;
@@ -81,7 +81,7 @@ namespace Project9
         public void ShowClickEffect(Vector2 worldPosition)
         {
             _clickEffectPosition = worldPosition;
-            _clickEffectTimer = CLICK_EFFECT_DURATION;
+            _clickEffectTimer = GameConfig.ClickEffectDuration;
         }
 
         /// <summary>
@@ -105,7 +105,13 @@ namespace Project9
         /// </summary>
         public void ShowDamageNumber(Vector2 worldPosition, float damage)
         {
-            _damageNumbers.Add(new DamageNumber(worldPosition, damage));
+            // Use array instead of List to avoid allocations
+            if (_damageNumberCount < _damageNumbers.Length)
+            {
+                _damageNumbers[_damageNumberCount] = new DamageNumber(worldPosition, damage);
+                _damageNumberCount++;
+            }
+            // If array is full, ignore new damage numbers (or overwrite oldest)
         }
         
         /// <summary>
@@ -113,12 +119,18 @@ namespace Project9
         /// </summary>
         public void UpdateDamageNumbers(float deltaTime)
         {
-            for (int i = _damageNumbers.Count - 1; i >= 0; i--)
+            // Update in reverse order so we can remove expired ones efficiently
+            for (int i = _damageNumberCount - 1; i >= 0; i--)
             {
                 _damageNumbers[i].Update(deltaTime);
                 if (_damageNumbers[i].IsExpired)
                 {
-                    _damageNumbers.RemoveAt(i);
+                    // Swap with last element and decrement count (more efficient than shifting)
+                    if (i < _damageNumberCount - 1)
+                    {
+                        _damageNumbers[i] = _damageNumbers[_damageNumberCount - 1];
+                    }
+                    _damageNumberCount--;
                 }
             }
         }
@@ -162,7 +174,7 @@ namespace Project9
             ));
             
             // Expand bounds with margin for safety (account for entity size and zoom)
-            float margin = 200.0f / _camera.Zoom; // Larger margin when zoomed out
+            float margin = GameConfig.FrustumCullingMargin / _camera.Zoom; // Larger margin when zoomed out
             float minX = screenTopLeft.X - margin;
             float maxX = screenBottomRight.X + margin;
             float minY = screenTopLeft.Y - margin;
@@ -666,7 +678,7 @@ namespace Project9
             }
 
             // Calculate fade based on timer
-            float fadeProgress = _clickEffectTimer / CLICK_EFFECT_DURATION;
+            float fadeProgress = _clickEffectTimer / GameConfig.ClickEffectDuration;
             float pulseScale = 1.0f + (1.0f - fadeProgress) * 0.5f; // Grows from 1.0 to 1.5
             byte fadeAlpha = (byte)(fadeProgress * 255);
             
@@ -969,13 +981,15 @@ namespace Project9
             if (_uiFont == null)
                 return;
             
-            if (_damageNumbers.Count == 0)
+            if (_damageNumberCount == 0)
                 return;
             
-            foreach (var damageNumber in _damageNumbers)
+            // Iterate only over active damage numbers
+            for (int i = 0; i < _damageNumberCount; i++)
             {
+                var damageNumber = _damageNumbers[i];
                 // Position in world space (above entity, above health bar)
-                Vector2 worldPos = damageNumber.Position + new Vector2(0, -50.0f);
+                Vector2 worldPos = damageNumber.Position + new Vector2(0, GameConfig.DamageNumberOffsetY);
                 
                 string damageText = $"-{damageNumber.Damage:F0}";
                 Vector2 textSize = _uiFont.MeasureString(damageText);

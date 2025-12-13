@@ -17,7 +17,7 @@ namespace Project9
         private bool _isAttacking;
         private bool _hasDetectedPlayer;
         private float _exclamationTimer;
-        private float _exclamationDuration = 1.0f;
+        private float _exclamationDuration = GameConfig.EnemyExclamationDuration;
         
         // Search behavior (when player goes out of view during alarm)
         private bool _isSearching = false;
@@ -25,8 +25,8 @@ namespace Project9
         private Vector2 _searchTarget;
         private float _searchTimer = 0.0f;
         private bool _previouslyHadLineOfSight = false; // Track if we had line of sight previously
-        private const float SEARCH_DURATION = 5.0f; // Search for 5 seconds
-        private const float SEARCH_RADIUS = 200.0f; // Search within 200 pixels of last known position
+        private const float SEARCH_DURATION = GameConfig.EnemySearchDuration;
+        private const float SEARCH_RADIUS = GameConfig.EnemySearchRadius;
         
         // Death animation
         private float _deathPulseTimer = 0.0f;
@@ -283,7 +283,7 @@ namespace Project9
             // If enemy has detected player (either directly or via camera alert), chase them
             // Use a large chase range when alerted (1024 pixels, same as camera alert radius)
             // During alarm, enemies should chase even without direct line of sight
-            const float maxChaseRange = 1024.0f;
+            const float maxChaseRange = GameConfig.EnemyMaxChaseRange;
             
             // If alarm is active, enemies chase even without line of sight
             // Otherwise, they need line of sight to chase
